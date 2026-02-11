@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">Kito</string>
+
+    <!-- 通知相关 -->
+    <string name="notification_channel_floating">悬浮窗服务</string>
+    <string name="notification_channel_floating_description">保持屏幕翻译服务在后台运行</string>
+    <string name="notification_title">屏幕翻译正在运行</string>
+    <string name="notification_text">点击悬浮球开始翻译</string>
+    <string name="notification_stop">停止服务</string>
+
+    <!-- 权限相关 -->
+    <string name="permission_overlay_required">需要悬浮窗权限以显示翻译结果</string>
+    <string name="permission_battery_optimization">建议关闭电池优化以保持服务运行</string>
+
+    <!-- 错误提示 -->
+    <string name="error_api_key_invalid">API Key 格式无效</string>
+    <string name="error_network">网络连接失败，请检查网络设置</string>
+    <string name="error_service_start">启动服务失败</string>
+</resources>
