@@ -153,6 +153,8 @@ class MainActivity : ComponentActivity() {
      * 请求录屏权限
      */
     private fun requestScreenCapturePermission() {
+        // 确保 ScreenCaptureManager 已初始化（可能之前被 release() 清空了）
+        ScreenCaptureManager.init(applicationContext)
         val intent = ScreenCaptureManager.requestPermission(this, REQUEST_SCREEN_CAPTURE)
         currentRequestType = RequestType.SCREEN_CAPTURE
         startActivityForResult(intent, REQUEST_SCREEN_CAPTURE)
