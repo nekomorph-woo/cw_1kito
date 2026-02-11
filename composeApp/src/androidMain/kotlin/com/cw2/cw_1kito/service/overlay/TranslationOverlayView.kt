@@ -2,7 +2,10 @@ package com.cw2.cw_1kito.service.overlay
 
 import android.content.Context
 import android.graphics.Canvas
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import com.cw2.cw_1kito.model.TranslationResult
@@ -30,6 +33,15 @@ class TranslationOverlayView(
 
     private val renderer = OverlayRenderer(screenWidth, screenHeight)
 
+    // 双击检测
+    private var lastTapTime = 0L
+    private val doubleTapTimeout = 300L // 双击时间间隔阈值（毫秒）
+    private val doubleTapHandler = Handler(Looper.getMainLooper())
+    private val doubleTapRunnable = Runnable {
+        // 超时后重置，说明是单击而不是双击
+        lastTapTime = 0L
+    }
+
     init {
         // 设置视图为全屏
         layoutParams = ViewGroup.LayoutParams(
@@ -40,13 +52,28 @@ class TranslationOverlayView(
         // 设置背景为透明
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
 
-        // 点击任意位置关闭覆盖层
-        setOnClickListener {
-            Log.d(tag, "Overlay dismissed by click")
-            onDismiss()
-        }
-
         Log.d(tag, "TranslationOverlayView created with ${results.size} results")
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_UP) {
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastTapTime < doubleTapTimeout) {
+                // 双击检测成功
+                doubleTapHandler.removeCallbacks(doubleTapRunnable)
+                lastTapTime = 0L
+                Log.d(tag, "Overlay dismissed by double tap")
+                performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                onDismiss()
+                return true
+            } else {
+                // 第一次点击，启动超时检测
+                lastTapTime = currentTime
+                doubleTapHandler.removeCallbacks(doubleTapRunnable)
+                doubleTapHandler.postDelayed(doubleTapRunnable, doubleTapTimeout)
+            }
+        }
+        return super.onTouchEvent(event)
     }
 
     override fun onDraw(canvas: Canvas) {

@@ -32,31 +32,58 @@ class FloatingBallView(
         private const val BALL_SIZE_DP = 48
     }
 
-    // 颜色常量（不能是 const val，因为调用非常量函数）
-    private val BALL_COLOR = Color.parseColor("#4285F4")
-    private val BALL_COLOR_IDLE = Color.parseColor("#9E9E9E")
-    private val BALL_COLOR_SUCCESS = Color.parseColor("#4CAF50")
-    private val BALL_COLOR_ERROR = Color.parseColor("#F44336")
-    private val BALL_COLOR_LOADING = Color.parseColor("#2196F3")
+    // 颜色常量（Material 3 色板）
+    private val BALL_COLOR_IDLE = Color.parseColor("#9CA3AF")        // 中性灰，更柔和
+    private val BALL_COLOR_LOADING = Color.parseColor("#6366F1")      // Indigo，更有活力
+    private val BALL_COLOR_SUCCESS = Color.parseColor("#10B981")     // Emerald，更现代
+    private val BALL_COLOR_ERROR = Color.parseColor("#EF4444")       // Red，保持一致
 
     private val ballSize: Int
     private val density: Float
 
+    // 主球体画笔（带双层阴影效果）
     private val ballPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = BALL_COLOR_IDLE
         style = Paint.Style.FILL
-        setShadowLayer(8f, 0f, 2f, Color.parseColor("#40000000"))
+        // 外阴影：更柔和、更扩散
+        setShadowLayer(16f, 0f, 6f, Color.parseColor("#1A000000"))
+    }
+
+    // 内发光画笔（双层阴影的第二层）
+    private val innerGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = BALL_COLOR_IDLE
+        style = Paint.Style.FILL
+        alpha = 180  // 70% 不透明度
     }
 
     private val loadingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = BALL_COLOR_LOADING
         style = Paint.Style.STROKE
-        strokeWidth = 4f
+        strokeWidth = 3.5f
         strokeCap = Paint.Cap.ROUND
+    }
+
+    // 脉冲外圈画笔
+    private val pulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = BALL_COLOR_LOADING
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        alpha = 80  // 30% 不透明度
     }
 
     private var loadingAngle = 0f
     private var loadingAnimator: ValueAnimator? = null
+    private var pulseRadius = 0f  // 脉冲动画半径
+    private var pulseAlpha = 80    // 脉冲动画透明度
+
+    // 呼吸动画相关
+    private var breathAnimator: ValueAnimator? = null
+    private var breathScale = 1f
+    private var breathAlpha = 255f
+
+    // 按压反馈动画相关
+    private var pressAnimator: ValueAnimator? = null
+    private var currentScale = 1f
 
     // 状态
     @State
@@ -113,11 +140,30 @@ class FloatingBallView(
 
         val centerX = width / 2f
         val centerY = height / 2f
-        val radius = ballSize / 2f
+        val baseRadius = ballSize / 2f
 
-        // 绘制加载状态
+        // 应用按压反馈和呼吸动画的综合缩放
+        val totalScale = currentScale * breathScale
+        val radius = baseRadius * totalScale
+
+        // 应用呼吸动画的透明度（仅在空闲状态）
+        if (currentState == FloatingService.STATE_IDLE) {
+            ballPaint.alpha = breathAlpha.toInt()
+            innerGlowPaint.alpha = (breathAlpha * 0.7f).toInt()
+        } else {
+            ballPaint.alpha = 255
+            innerGlowPaint.alpha = 180
+        }
+
+        // 绘制脉冲外圈（加载状态）
+        if (currentState == FloatingService.STATE_LOADING && pulseRadius > 0f) {
+            pulsePaint.alpha = (pulseAlpha * (255 / 100f)).toInt()
+            canvas.drawCircle(centerX, centerY, radius + pulseRadius, pulsePaint)
+        }
+
+        // 绘制加载旋转圆环
         if (currentState == FloatingService.STATE_LOADING) {
-            val loadingRadius = radius + 6f
+            val loadingRadius = radius + 8f
             canvas.save()
             canvas.rotate(loadingAngle, centerX, centerY)
             canvas.drawArc(
@@ -133,7 +179,11 @@ class FloatingBallView(
             canvas.restore()
         }
 
-        // 绘制悬浮球
+        // 绘制内发光层（双层阴影效果）
+        val innerGlowRadius = radius * 0.92f
+        canvas.drawCircle(centerX, centerY, innerGlowRadius, innerGlowPaint)
+
+        // 绘制主悬浮球
         canvas.drawCircle(centerX, centerY, radius, ballPaint)
 
         // 绘制图标（根据状态）
@@ -214,6 +264,8 @@ class FloatingBallView(
                 lastY = event.rawY
                 // 启动长按计时
                 longPressHandler.postDelayed(longPressRunnable, 500)
+                // 按压反馈动画
+                startPressAnimation()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -225,6 +277,8 @@ class FloatingBallView(
                     isDragging = true
                     // 开始拖拽，取消长按
                     longPressHandler.removeCallbacks(longPressRunnable)
+                    // 拖拽时恢复原始大小
+                    startReleaseAnimation()
                 }
 
                 if (isDragging) {
@@ -241,9 +295,14 @@ class FloatingBallView(
                 if (!isDragging && !isLongPressTriggered) {
                     // 短按点击事件
                     performClick()
+                    // 释放反馈动画
+                    startReleaseAnimation()
                 } else if (isDragging) {
                     // 拖拽结束，应用磁吸效果
                     applySnapToEdge()
+                } else {
+                    // 长按触发后释放
+                    startReleaseAnimation()
                 }
                 // 长按事件已经在 longPressRunnable 中处理过了
 
@@ -328,23 +387,43 @@ class FloatingBallView(
     }
 
     /**
-     * 设置加载状态
+     * 设置加载状态（带颜色过渡动画）
      */
     fun setLoadingState(@State state: Int) {
         val oldState = currentState
         currentState = state
 
+        val targetColor = when (state) {
+            FloatingService.STATE_IDLE -> BALL_COLOR_IDLE
+            FloatingService.STATE_LOADING -> BALL_COLOR_LOADING
+            FloatingService.STATE_SUCCESS -> BALL_COLOR_SUCCESS
+            FloatingService.STATE_ERROR -> BALL_COLOR_ERROR
+            else -> BALL_COLOR_IDLE
+        }
+
+        // 颜色过渡动画
+        if (oldState != state && oldState != FloatingService.STATE_IDLE) {
+            // 从非空闲状态切换时，使用颜色过渡动画
+            val startColor = ballPaint.color
+            animateColorChange(startColor, targetColor, 300)
+        } else {
+            // 直接设置颜色
+            ballPaint.color = targetColor
+            innerGlowPaint.color = targetColor
+        }
+
         when (state) {
             FloatingService.STATE_IDLE -> {
-                ballPaint.color = BALL_COLOR_IDLE
                 stopLoadingAnimation()
+                stopBreathAnimation()
+                startBreathAnimation()
             }
             FloatingService.STATE_LOADING -> {
-                ballPaint.color = BALL_COLOR_LOADING
+                stopBreathAnimation()
                 startLoadingAnimation()
             }
             FloatingService.STATE_SUCCESS -> {
-                ballPaint.color = BALL_COLOR_SUCCESS
+                stopBreathAnimation()
                 stopLoadingAnimation()
                 // 2秒后恢复空闲状态
                 postDelayed({
@@ -354,7 +433,7 @@ class FloatingBallView(
                 }, 2000)
             }
             FloatingService.STATE_ERROR -> {
-                ballPaint.color = BALL_COLOR_ERROR
+                stopBreathAnimation()
                 stopLoadingAnimation()
                 // 2秒后恢复空闲状态
                 postDelayed({
@@ -371,17 +450,80 @@ class FloatingBallView(
     }
 
     /**
-     * 开始加载动画
+     * 颜色过渡动画
+     */
+    private fun animateColorChange(startColor: Int, endColor: Int, duration: Long) {
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            this.duration = duration
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            addUpdateListener { animator ->
+                val fraction = animator.animatedValue as Float
+                val newColor = interpolateColor(startColor, endColor, fraction)
+                ballPaint.color = newColor
+                innerGlowPaint.color = newColor
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    /**
+     * 颜色插值计算
+     */
+    private fun interpolateColor(startColor: Int, endColor: Int, fraction: Float): Int {
+        val startA = (startColor shr 24) and 0xFF
+        val startR = (startColor shr 16) and 0xFF
+        val startG = (startColor shr 8) and 0xFF
+        val startB = startColor and 0xFF
+
+        val endA = (endColor shr 24) and 0xFF
+        val endR = (endColor shr 16) and 0xFF
+        val endG = (endColor shr 8) and 0xFF
+        val endB = endColor and 0xFF
+
+        val a = (startA + (endA - startA) * fraction).toInt()
+        val r = (startR + (endR - startR) * fraction).toInt()
+        val g = (startG + (endG - startG) * fraction).toInt()
+        val b = (startB + (endB - startB) * fraction).toInt()
+
+        return (a shl 24) or (r shl 16) or (g shl 8) or b
+    }
+
+    /**
+     * 开始加载动画（旋转圆环 + 脉冲效果）
      */
     private fun startLoadingAnimation() {
         if (loadingAnimator?.isRunning == true) return
 
-        loadingAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = 1000
+        val animators = listOf(
+            // 旋转圆环动画
+            ValueAnimator.ofFloat(0f, 360f).apply {
+                duration = 1200
+                repeatCount = ValueAnimator.INFINITE
+                interpolator = android.view.animation.LinearInterpolator()
+            },
+            // 脉冲扩散动画
+            ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 1500
+                repeatCount = ValueAnimator.INFINITE
+                repeatMode = ValueAnimator.RESTART
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+        )
+
+        loadingAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 1500
             repeatCount = ValueAnimator.INFINITE
             interpolator = android.view.animation.LinearInterpolator()
             addUpdateListener { animator ->
-                loadingAngle = animator.animatedValue as Float
+                // 旋转角度
+                loadingAngle = (animator.animatedValue as Float * 360) % 360
+
+                // 脉冲效果: radius 0 → 12, alpha 80 → 0
+                val pulseValue = ((animator.currentPlayTime % 1500) / 1500f)
+                pulseRadius = pulseValue * 12f
+                pulseAlpha = (80 * (1 - pulseValue)).toInt()
+
                 invalidate()
             }
             start()
@@ -395,6 +537,73 @@ class FloatingBallView(
         loadingAnimator?.cancel()
         loadingAnimator = null
         loadingAngle = 0f
+        pulseRadius = 0f
+        pulseAlpha = 80
+    }
+
+    /**
+     * 开始呼吸动画（空闲状态）
+     */
+    private fun startBreathAnimation() {
+        if (breathAnimator?.isRunning == true) return
+
+        breathAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 3000  // 3秒周期
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            addUpdateListener { animator ->
+                val value = animator.animatedValue as Float
+                // 缩放: 0.98 ↔ 1.0
+                breathScale = 0.98f + (value * 0.02f)
+                // 透明度: 217 ↔ 255 (85% ↔ 100%)
+                breathAlpha = 217f + (value * 38f)
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    /**
+     * 停止呼吸动画
+     */
+    private fun stopBreathAnimation() {
+        breathAnimator?.cancel()
+        breathAnimator = null
+        breathScale = 1f
+        breathAlpha = 255f
+    }
+
+    /**
+     * 开始按压反馈动画
+     */
+    private fun startPressAnimation() {
+        pressAnimator?.cancel()
+        pressAnimator = ValueAnimator.ofFloat(1f, 0.9f).apply {
+            duration = 100
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { animator ->
+                currentScale = animator.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    /**
+     * 开始释放反馈动画（带弹性效果）
+     */
+    private fun startReleaseAnimation() {
+        pressAnimator?.cancel()
+        pressAnimator = ValueAnimator.ofFloat(currentScale, 1f).apply {
+            duration = 200
+            interpolator = android.view.animation.OvershootInterpolator(1.5f)
+            addUpdateListener { animator ->
+                currentScale = animator.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
     }
 
     /**
