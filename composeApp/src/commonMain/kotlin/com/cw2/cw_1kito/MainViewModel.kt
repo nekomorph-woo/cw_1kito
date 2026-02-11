@@ -66,6 +66,10 @@ class MainViewModel(
                 _uiState.update { it.copy(
                     customPrompt = savedPrompt ?: TranslationApiClientImpl.DEFAULT_PROMPT
                 ) }
+
+                // 加载流式翻译开关
+                val streamingEnabled = configManager.getStreamingEnabled()
+                _uiState.update { it.copy(streamingEnabled = streamingEnabled) }
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "加载配置失败", e)
             }
@@ -188,6 +192,19 @@ class MainViewModel(
             }
             SettingsEvent.ClearError -> {
                 _uiState.update { it.copy(errorMessage = null) }
+            }
+            is SettingsEvent.StreamingEnabledChanged -> {
+                _uiState.update { it.copy(streamingEnabled = event.enabled) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveStreamingEnabled(event.enabled)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存流式翻译设置失败", e)
+                    }
+                }
+            }
+            SettingsEvent.NavigateToLab -> {
+                // 导航由 MainScreen 状态控制，无需处理
             }
         }
     }

@@ -60,6 +60,16 @@ interface ConfigManager {
     val configChanges: Flow<ConfigChange>
 
     /**
+     * 获取流式翻译开关状态
+     */
+    suspend fun getStreamingEnabled(): Boolean
+
+    /**
+     * 保存流式翻译开关状态
+     */
+    suspend fun saveStreamingEnabled(enabled: Boolean)
+
+    /**
      * 清除所有配置
      */
     suspend fun clearAll()

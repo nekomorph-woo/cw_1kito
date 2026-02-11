@@ -1,6 +1,7 @@
 package com.cw2.cw_1kito.data.api
 
 import com.cw2.cw_1kito.model.VlmModel
+import kotlinx.coroutines.flow.Flow
 
 /**
  * 翻译 API 客户端接口
@@ -31,6 +32,12 @@ interface TranslationApiClient {
      * 获取当前 API Key
      */
     fun getApiKey(): String?
+
+    /**
+     * 流式翻译请求，返回 token 流
+     * @return Flow<String> 每个元素是一个 content delta token
+     */
+    fun translateStream(request: TranslationApiRequest): Flow<String>
 }
 
 /**

@@ -20,11 +20,13 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Toast
 import com.cw2.cw_1kito.data.api.ApiException
+import com.cw2.cw_1kito.data.api.StreamingJsonParser
 import com.cw2.cw_1kito.data.api.TranslationApiClient
 import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.data.api.TranslationApiRequest
 import com.cw2.cw_1kito.data.config.AndroidConfigManagerImpl
 import com.cw2.cw_1kito.model.BoundingBox
+import com.cw2.cw_1kito.model.CoordinateMode
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.TranslationResult
 import com.cw2.cw_1kito.model.VlmModel
@@ -41,6 +43,7 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -108,6 +111,9 @@ class FloatingService : Service() {
     private lateinit var windowManager: WindowManager
     private var floatingView: FloatingBallView? = null
     private var overlayView: com.cw2.cw_1kito.service.overlay.TranslationOverlayView? = null
+
+    // 当前流式翻译的 Job，用于取消
+    private var streamingJob: Job? = null
 
     // 协程作用域
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -340,9 +346,21 @@ class FloatingService : Service() {
     }
 
     /**
-     * 执行翻译流程
+     * 执行翻译流程（入口，根据配置选择流式或非流式）
      */
     private suspend fun performTranslation() {
+        val streamingEnabled = configManager.getStreamingEnabled()
+        if (streamingEnabled) {
+            performStreamingTranslation()
+        } else {
+            performNonStreamingTranslation()
+        }
+    }
+
+    /**
+     * 执行非流式翻译流程（原有逻辑）
+     */
+    private suspend fun performNonStreamingTranslation() {
         updateLoadingState(STATE_LOADING)
 
         try {
@@ -386,6 +404,124 @@ class FloatingService : Service() {
             }
             updateLoadingState(STATE_ERROR)
         }
+    }
+
+    /**
+     * 执行流式翻译流程
+     */
+    private suspend fun performStreamingTranslation() {
+        updateLoadingState(STATE_LOADING)
+
+        streamingJob = serviceScope.launch {
+            try {
+                val imageBytes = captureScreen()
+                val (screenWidth, screenHeight) = getScreenDimensions()
+                val request = buildTranslationRequest(imageBytes, screenWidth, screenHeight)
+
+                // 立刻创建空覆盖层
+                withContext(Dispatchers.Main) {
+                    showEmptyOverlay(screenWidth, screenHeight)
+                }
+
+                // 流式接收 + 增量解析
+                val parser = StreamingJsonParser()
+                var resultCount = 0
+                var coordinateMode = CoordinateMode.PENDING
+
+                apiClient.translateStream(request).collect { token ->
+                    for (jsonStr in parser.feed(token)) {
+                        // 首条结果：先检测坐标模式，再解析
+                        if (coordinateMode == CoordinateMode.PENDING) {
+                            val raw = Json.decodeFromString<JsonTranslationResult>(jsonStr)
+                            coordinateMode = CoordinateMode.detectCoordinateMode(
+                                raw.coordinates.map { it.toInt() },
+                                screenWidth, screenHeight
+                            )
+                            Log.d(TAG, "Detected coordinate mode: $coordinateMode")
+                        }
+
+                        val result = StreamingResultParser.parseOne(
+                            jsonStr, screenWidth, screenHeight, coordinateMode
+                        )
+                        if (result != null) {
+                            resultCount++
+                            withContext(Dispatchers.Main) {
+                                overlayView?.addResult(result)
+                            }
+                        }
+                    }
+                }
+
+                updateLoadingState(if (resultCount > 0) STATE_SUCCESS else STATE_ERROR)
+                Log.d(TAG, "Streaming translation completed: $resultCount results")
+            } catch (e: Exception) {
+                Log.e(TAG, "Streaming translation failed", e)
+                // 已渲染的覆盖层保留在屏幕上
+                when (e) {
+                    is ApiException.NetworkError ->
+                        Toast.makeText(this@FloatingService, "网络异常: ${e.message}", Toast.LENGTH_SHORT).show()
+                    is ApiException.AuthError ->
+                        Toast.makeText(this@FloatingService, "认证错误: 请检查 API Key", Toast.LENGTH_LONG).show()
+                    is kotlinx.coroutines.CancellationException ->
+                        Log.d(TAG, "Streaming cancelled by user")
+                    else ->
+                        Toast.makeText(this@FloatingService, "翻译失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+                // 悬浮球显示红叉（与非流式异常交互一致）
+                updateLoadingState(STATE_ERROR)
+            }
+        }
+    }
+
+    /**
+     * 获取屏幕尺寸
+     */
+    private fun getScreenDimensions(): Pair<Int, Int> {
+        val metrics = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+        return Pair(metrics.widthPixels, metrics.heightPixels)
+    }
+
+    /**
+     * 构建翻译 API 请求
+     */
+    private suspend fun buildTranslationRequest(
+        imageBytes: ByteArray,
+        screenWidth: Int,
+        screenHeight: Int
+    ): TranslationApiRequest {
+        // 获取 API Key 并设置到 API 客户端
+        val apiKey = configManager.getApiKey()
+        if (apiKey.isNullOrEmpty()) {
+            throw ApiException.AuthError("请先在设置中配置 API Key")
+        }
+        apiClient.setApiKey(apiKey)
+
+        // 获取语言配置
+        val langConfig = configManager.getLanguageConfig()
+        val targetLanguage = langConfig.targetLanguage
+
+        // 获取模型配置
+        val model = configManager.getSelectedModel()
+
+        // 获取自定义提示词
+        val customPrompt = configManager.getCustomPrompt()
+
+        // 将图片转换为 Base64
+        val base64Image = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
+        Log.d(TAG, "Base64 image size: ${base64Image.length} characters")
+
+        return TranslationApiRequest(
+            model = model,
+            imageData = base64Image,
+            targetLanguage = targetLanguage,
+            temperature = 0.7,
+            maxTokens = 4000,
+            imageWidth = screenWidth,
+            imageHeight = screenHeight,
+            customPrompt = customPrompt
+        )
     }
 
     /**
@@ -658,7 +794,7 @@ class FloatingService : Service() {
      * 显示覆盖层
      */
     private fun showOverlay(
-        results: List<TranslationResult>,
+        initialResults: List<TranslationResult>,
         screenWidth: Int,
         screenHeight: Int
     ) {
@@ -666,7 +802,7 @@ class FloatingService : Service() {
 
         overlayView = com.cw2.cw_1kito.service.overlay.TranslationOverlayView(
             context = this,
-            results = results,
+            initialResults = initialResults,
             screenWidth = screenWidth,
             screenHeight = screenHeight,
             onDismiss = {
@@ -674,7 +810,50 @@ class FloatingService : Service() {
             }
         )
 
-        val params = WindowManager.LayoutParams(
+        val params = createOverlayLayoutParams(screenWidth, screenHeight)
+
+        try {
+            windowManager.addView(overlayView, params)
+            Log.d(TAG, "Overlay view added with ${initialResults.size} results")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add overlay view", e)
+        }
+    }
+
+    /**
+     * 创建空覆盖层（流式模式专用）
+     * 后续通过 addResult() 逐条填充内容
+     */
+    private fun showEmptyOverlay(screenWidth: Int, screenHeight: Int) {
+        hideOverlay()
+
+        overlayView = com.cw2.cw_1kito.service.overlay.TranslationOverlayView(
+            context = this,
+            initialResults = emptyList(),
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            onDismiss = {
+                // 用户点击覆盖层 → 取消流式传输 + 关闭覆盖层
+                streamingJob?.cancel()
+                hideOverlay()
+            }
+        )
+
+        val params = createOverlayLayoutParams(screenWidth, screenHeight)
+
+        try {
+            windowManager.addView(overlayView, params)
+            Log.d(TAG, "Empty overlay view added")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add empty overlay", e)
+        }
+    }
+
+    /**
+     * 创建覆盖层的 WindowManager.LayoutParams（流式和非流式共用）
+     */
+    private fun createOverlayLayoutParams(screenWidth: Int, screenHeight: Int): WindowManager.LayoutParams {
+        return WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -689,16 +868,8 @@ class FloatingService : Service() {
             android.graphics.PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            // 使用全屏尺寸，确保覆盖状态栏和导航栏
             width = screenWidth
             height = screenHeight
-        }
-
-        try {
-            windowManager.addView(overlayView, params)
-            Log.d(TAG, "Overlay view added with ${results.size} results")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to add overlay view", e)
         }
     }
 
@@ -716,16 +887,6 @@ class FloatingService : Service() {
         }
     }
 }
-
-/**
- * JSON 翻译结果格式
- */
-@kotlinx.serialization.Serializable
-data class JsonTranslationResult(
-    val original_text: String,
-    val translated_text: String,
-    val coordinates: List<Float>
-)
 
 /**
  * 用于传递的 Parcelable TranslationResult

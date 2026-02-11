@@ -136,8 +136,17 @@ abstract class ConfigManagerImpl : ConfigManager {
         }
     }
 
+    override suspend fun getStreamingEnabled(): Boolean {
+        return getString(STREAMING_ENABLED_KEY)?.toBoolean() ?: false
+    }
+
+    override suspend fun saveStreamingEnabled(enabled: Boolean) {
+        saveString(STREAMING_ENABLED_KEY, enabled.toString())
+    }
+
     companion object {
         private const val CUSTOM_PROMPT_KEY = "custom_prompt"
+        private const val STREAMING_ENABLED_KEY = "lab_streaming_enabled"
     }
 }
 

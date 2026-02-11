@@ -11,14 +11,22 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
 import kotlin.math.pow
 
@@ -61,8 +69,72 @@ class TranslationApiClientImpl(
 
     override suspend fun translate(request: TranslationApiRequest): SiliconFlowResponse {
         val apiKey = currentApiKey ?: throw AuthError("API Key 未设置")
+        val siliconRequest = buildSiliconFlowRequest(request, stream = false)
 
-        val siliconRequest = SiliconFlowRequest(
+        return executeWithRetry {
+            client.post(baseUrl) {
+                contentType(ContentType.Application.Json)
+                header("Authorization", "Bearer $apiKey")
+                setBody(siliconRequest)
+            }.let { response ->
+                handleResponse(response)
+            }
+        }
+    }
+
+    override fun translateStream(request: TranslationApiRequest): Flow<String> = flow {
+        val apiKey = currentApiKey ?: throw AuthError("API Key 未设置")
+        val siliconRequest = buildSiliconFlowRequest(request, stream = true)
+
+        client.preparePost(baseUrl) {
+            contentType(ContentType.Application.Json)
+            header("Authorization", "Bearer $apiKey")
+            setBody(siliconRequest)
+        }.execute { response ->
+            if (response.status != HttpStatusCode.OK) {
+                handleStreamErrorResponse(response)
+            }
+
+            val channel: ByteReadChannel = response.bodyAsChannel()
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line() ?: break
+                // 忽略 SSE 注释行（常用作 keep-alive ping）
+                if (line.startsWith(":")) continue
+                // 忽略空行和非 data 行
+                if (!line.startsWith("data: ")) continue
+                val data = line.removePrefix("data: ").trim()
+                if (data == "[DONE]") break
+
+                val chunk = json.decodeFromString<SiliconFlowStreamChunk>(data)
+                val content = chunk.choices.firstOrNull()?.delta?.content
+                if (content != null) emit(content)
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    override suspend fun validateApiKey(apiKey: String): Boolean {
+        return try {
+            currentApiKey = apiKey
+            val testRequest = TranslationApiRequest(
+                model = com.cw2.cw_1kito.model.VlmModel.DEFAULT,
+                imageData = createMinimalImageBase64(),
+                targetLanguage = com.cw2.cw_1kito.model.Language.ZH,
+                maxTokens = 10
+            )
+            translate(testRequest)
+            true
+        } catch (e: AuthError) {
+            false
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    /**
+     * 构建 SiliconFlow API 请求体（流式和非流式共用）
+     */
+    private fun buildSiliconFlowRequest(request: TranslationApiRequest, stream: Boolean = false): SiliconFlowRequest {
+        return SiliconFlowRequest(
             model = request.model.id,
             messages = listOf(
                 SiliconFlowMessage(
@@ -86,37 +158,9 @@ class TranslationApiClientImpl(
                 )
             ),
             temperature = request.temperature,
-            maxTokens = request.maxTokens
+            maxTokens = request.maxTokens,
+            stream = stream
         )
-
-        return executeWithRetry {
-            client.post(baseUrl) {
-                contentType(ContentType.Application.Json)
-                header("Authorization", "Bearer $apiKey")
-                setBody(siliconRequest)
-            }.let { response ->
-                handleResponse(response)
-            }
-        }
-    }
-
-    override suspend fun validateApiKey(apiKey: String): Boolean {
-        return try {
-            currentApiKey = apiKey
-            val testRequest = TranslationApiRequest(
-                model = com.cw2.cw_1kito.model.VlmModel.DEFAULT,
-                imageData = createMinimalImageBase64(),
-                targetLanguage = com.cw2.cw_1kito.model.Language.ZH,
-                maxTokens = 10 // 最小 token 数
-            )
-            translate(testRequest)
-            true
-        } catch (e: AuthError) {
-            false
-        } catch (e: Exception) {
-            // 其他错误不认为是 Key 无效
-            true
-        }
     }
 
     /**
@@ -140,7 +184,6 @@ class TranslationApiClientImpl(
                     delay(calculateBackoff(attempt))
                 }
             } catch (e: ServerError) {
-                // 服务器错误通常不需要重试
                 throw e
             }
         }
@@ -156,7 +199,7 @@ class TranslationApiClientImpl(
     }
 
     /**
-     * 处理 HTTP 响应
+     * 处理 HTTP 响应（非流式）
      */
     private suspend fun handleResponse(response: HttpResponse): SiliconFlowResponse {
         return when (response.status) {
@@ -191,12 +234,24 @@ class TranslationApiClientImpl(
     }
 
     /**
+     * 处理流式请求的错误响应
+     */
+    private suspend fun handleStreamErrorResponse(response: HttpResponse) {
+        when (response.status) {
+            HttpStatusCode.Unauthorized -> throw AuthError("API Key 无效或已过期")
+            HttpStatusCode.TooManyRequests -> {
+                val retryAfter = response.headers["Retry-After"]?.toLongOrNull()
+                throw RateLimitError(retryAfter)
+            }
+            else -> {
+                val errorBody = response.bodyAsText()
+                throw ServerError(response.status.value, errorBody)
+            }
+        }
+    }
+
+    /**
      * 构建翻译 Prompt
-     *
-     * 如果提供了 customPrompt，则使用自定义 prompt 并替换模板变量：
-     * - {{targetLanguage}} -> 目标语言名称
-     * - {{imageWidth}} -> 图像宽度
-     * - {{imageHeight}} -> 图像高度
      */
     private fun buildPrompt(
         targetLanguage: com.cw2.cw_1kito.model.Language,
@@ -215,19 +270,10 @@ class TranslationApiClientImpl(
      * 创建最小化的测试图像（1x1 像素 PNG 的 base64）
      */
     private fun createMinimalImageBase64(): String {
-        // 最小的 1x1 透明 PNG 的 base64
         return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
     }
 
     companion object {
-        /**
-         * 默认提示词模板
-         *
-         * 支持的模板变量：
-         * - {{targetLanguage}} - 目标语言
-         * - {{imageWidth}} - 图像宽度（像素）
-         * - {{imageHeight}} - 图像高度（像素）
-         */
         const val DEFAULT_PROMPT = "You are an OCR and translation engine. The image resolution is {{imageWidth}}x{{imageHeight}} pixels.\n" +
             "\n" +
             "Your task:\n" +

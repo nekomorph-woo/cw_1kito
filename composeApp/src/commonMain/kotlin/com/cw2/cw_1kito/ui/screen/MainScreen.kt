@@ -1,17 +1,12 @@
 package com.cw2.cw_1kito.ui.screen
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import com.cw2.cw_1kito.model.Language
-import com.cw2.cw_1kito.model.VlmModel
-import com.cw2.cw_1kito.ui.component.*
 
 /**
  * 主界面组件
  *
- * 这是应用的入口界面，提供设置和启动悬浮窗服务的功能
+ * 这是应用的入口界面，通过状态驱动在设置页面和实验室页面之间切换
  *
  * @param uiState UI 状态
  * @param onEvent 事件回调
@@ -23,9 +18,25 @@ fun MainScreen(
     onEvent: (SettingsEvent) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    SettingsScreen(
-        uiState = uiState,
-        onEvent = onEvent,
-        modifier = modifier
-    )
+    var showLabSettings by remember { mutableStateOf(false) }
+
+    if (showLabSettings) {
+        LabSettingsScreen(
+            streamingEnabled = uiState.streamingEnabled,
+            onStreamingEnabledChange = { onEvent(SettingsEvent.StreamingEnabledChanged(it)) },
+            onNavigateBack = { showLabSettings = false }
+        )
+    } else {
+        SettingsScreen(
+            uiState = uiState,
+            onEvent = { event ->
+                if (event is SettingsEvent.NavigateToLab) {
+                    showLabSettings = true
+                } else {
+                    onEvent(event)
+                }
+            },
+            modifier = modifier
+        )
+    }
 }

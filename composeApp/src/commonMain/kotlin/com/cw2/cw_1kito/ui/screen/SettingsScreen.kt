@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.VlmModel
@@ -27,6 +28,7 @@ data class SettingsUiState(
     val hasBatteryOptimizationDisabled: Boolean = false,
     val hasScreenCapturePermission: Boolean = false,
     val canStartService: Boolean = false,
+    val streamingEnabled: Boolean = false,
     val isLoading: Boolean = false,
     val errorMessage: String? = null
 ) {
@@ -52,6 +54,8 @@ sealed class SettingsEvent {
     data object RequestScreenCapturePermission : SettingsEvent()
     data object StartService : SettingsEvent()
     data object ClearError : SettingsEvent()
+    data object NavigateToLab : SettingsEvent()
+    data class StreamingEnabledChanged(val enabled: Boolean) : SettingsEvent()
 }
 
 /**
@@ -90,6 +94,20 @@ fun SettingsScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Kito 设置") },
+                actions = {
+                    TextButton(onClick = { onEvent(SettingsEvent.NavigateToLab) }) {
+                        Text(
+                            text = "⚙",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontSize = 20.sp
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "实验室",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer

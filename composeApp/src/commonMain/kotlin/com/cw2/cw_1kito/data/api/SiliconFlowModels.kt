@@ -166,3 +166,27 @@ data class TokenUsage(
         }
     }
 }
+
+/**
+ * 流式响应 chunk
+ */
+@Serializable
+data class SiliconFlowStreamChunk(
+    val id: String,
+    val choices: List<SiliconFlowStreamChoice>,
+    val model: String? = null
+)
+
+@Serializable
+data class SiliconFlowStreamChoice(
+    val index: Int,
+    val delta: SiliconFlowDelta,
+    @SerialName("finish_reason")
+    val finishReason: String? = null
+)
+
+@Serializable
+data class SiliconFlowDelta(
+    val role: String? = null,
+    val content: String? = null
+)
