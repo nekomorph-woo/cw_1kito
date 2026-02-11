@@ -81,6 +81,26 @@ interface ConfigManager {
     suspend fun saveThemeConfig(config: ThemeConfig)
 
     /**
+     * 获取文本合并提示词（null 表示使用默认）
+     */
+    suspend fun getTextMergingPrompt(): String?
+
+    /**
+     * 保存文本合并提示词
+     */
+    suspend fun saveTextMergingPrompt(prompt: String?)
+
+    /**
+     * 获取文本合并功能开关状态
+     */
+    suspend fun getTextMergingEnabled(): Boolean
+
+    /**
+     * 保存文本合并功能开关状态
+     */
+    suspend fun saveTextMergingEnabled(enabled: Boolean)
+
+    /**
      * 清除所有配置
      */
     suspend fun clearAll()
@@ -102,4 +122,5 @@ sealed class ConfigChange {
     data class LanguageChanged(val config: LanguageConfig) : ConfigChange()
     data class ApiKeyChanged(val isValid: Boolean) : ConfigChange()
     data class ModelChanged(val model: VlmModel) : ConfigChange()
+    data class TextMergingChanged(val enabled: Boolean) : ConfigChange()
 }

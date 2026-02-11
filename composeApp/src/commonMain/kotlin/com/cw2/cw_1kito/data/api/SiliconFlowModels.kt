@@ -141,7 +141,9 @@ data class TranslationApiRequest(
     val maxTokens: Int = 2000,
     val imageWidth: Int = 0,      // 图像实际宽度（像素）
     val imageHeight: Int = 0,     // 图像实际高度（像素）
-    val customPrompt: String? = null  // 自定义提示词（null 使用默认）
+    val customPrompt: String? = null,  // 自定义提示词（null 使用默认）
+    @SerialName("use_merging_prompt")
+    val useMergingPrompt: Boolean = false  // 是否使用文本合并提示词
 )
 
 /**

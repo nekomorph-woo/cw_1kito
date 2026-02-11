@@ -24,6 +24,8 @@ fun MainScreen(
         LabSettingsScreen(
             streamingEnabled = uiState.streamingEnabled,
             onStreamingEnabledChange = { onEvent(SettingsEvent.StreamingEnabledChanged(it)) },
+            textMergingEnabled = uiState.textMergingEnabled,
+            onTextMergingEnabledChange = { onEvent(SettingsEvent.TextMergingEnabledChanged(it)) },
             themeConfig = uiState.themeConfig,
             onThemeHueChange = { hue -> onEvent(SettingsEvent.ThemeHueChanged(hue)) },
             onDarkModeChange = { mode -> onEvent(SettingsEvent.DarkModeChanged(mode)) },

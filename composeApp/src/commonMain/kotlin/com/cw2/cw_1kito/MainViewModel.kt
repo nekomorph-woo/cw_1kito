@@ -75,6 +75,14 @@ class MainViewModel(
                 // 加载主题配置
                 val themeConfig = configManager.getThemeConfig()
                 _uiState.update { it.copy(themeConfig = themeConfig) }
+
+                // 加载文本合并配置
+                val textMergingEnabled = configManager.getTextMergingEnabled()
+                val savedMergingPrompt = configManager.getTextMergingPrompt()
+                _uiState.update { it.copy(
+                    textMergingEnabled = textMergingEnabled,
+                    textMergingPrompt = savedMergingPrompt ?: TranslationApiClientImpl.DEFAULT_MERGING_PROMPT
+                ) }
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "加载配置失败", e)
             }
@@ -244,6 +252,44 @@ class MainViewModel(
             SettingsEvent.NavigateToLab -> {
                 // 导航由 MainScreen 状态控制，无需处理
             }
+            is SettingsEvent.PromptTabChanged -> {
+                _uiState.update { it.copy(selectedPromptTab = event.tab) }
+            }
+            is SettingsEvent.TextMergingPromptChanged -> {
+                _uiState.update { it.copy(textMergingPrompt = event.prompt) }
+                viewModelScope.launch {
+                    try {
+                        // 如果和默认一致则清除持久化
+                        if (event.prompt == TranslationApiClientImpl.DEFAULT_MERGING_PROMPT) {
+                            configManager.saveTextMergingPrompt(null)
+                        } else {
+                            configManager.saveTextMergingPrompt(event.prompt)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存文本合并提示词失败", e)
+                    }
+                }
+            }
+            SettingsEvent.ResetTextMergingPrompt -> {
+                _uiState.update { it.copy(textMergingPrompt = TranslationApiClientImpl.DEFAULT_MERGING_PROMPT) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveTextMergingPrompt(null)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "重置文本合并提示词失败", e)
+                    }
+                }
+            }
+            is SettingsEvent.TextMergingEnabledChanged -> {
+                _uiState.update { it.copy(textMergingEnabled = event.enabled) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveTextMergingEnabled(event.enabled)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存文本合并开关状态失败", e)
+                    }
+                }
+            }
         }
     }
 
@@ -312,6 +358,16 @@ class MainViewModel(
             android.util.Log.d("MainViewModel", "API Key: ${apiKey.take(10)}...")
             android.util.Log.d("MainViewModel", "源语言: ${_uiState.value.sourceLanguage.displayName}")
             android.util.Log.d("MainViewModel", "目标语言: ${_uiState.value.targetLanguage.displayName}")
+            android.util.Log.d("MainViewModel", "文本合并模式: ${_uiState.value.textMergingEnabled}")
+
+            // 构建翻译配置，传入 textMergingEnabled 状态
+            val config = com.cw2.cw_1kito.model.TranslationConfig(
+                model = _uiState.value.selectedModel,
+                sourceLanguage = _uiState.value.sourceLanguage,
+                targetLanguage = _uiState.value.targetLanguage,
+                useMergingPrompt = _uiState.value.textMergingEnabled
+            )
+            android.util.Log.d("MainViewModel", "翻译配置: $config")
         }
     }
 }

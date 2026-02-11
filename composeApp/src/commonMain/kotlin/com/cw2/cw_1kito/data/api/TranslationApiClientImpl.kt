@@ -143,7 +143,13 @@ class TranslationApiClientImpl(
                         add(
                             SiliconFlowContent(
                                 type = "text",
-                                text = buildPrompt(request.targetLanguage, request.imageWidth, request.imageHeight, request.customPrompt)
+                                text = buildPrompt(
+                                    request.targetLanguage,
+                                    request.imageWidth,
+                                    request.imageHeight,
+                                    request.customPrompt,
+                                    request.useMergingPrompt
+                                )
                             )
                         )
                         add(
@@ -257,9 +263,14 @@ class TranslationApiClientImpl(
         targetLanguage: com.cw2.cw_1kito.model.Language,
         imageWidth: Int,
         imageHeight: Int,
-        customPrompt: String? = null
+        customPrompt: String? = null,
+        useMergingPrompt: Boolean = false
     ): String {
-        val template = customPrompt ?: DEFAULT_PROMPT
+        val template = when {
+            customPrompt != null -> customPrompt
+            useMergingPrompt -> DEFAULT_MERGING_PROMPT
+            else -> DEFAULT_PROMPT
+        }
         return template
             .replace("{{targetLanguage}}", targetLanguage.displayName)
             .replace("{{imageWidth}}", imageWidth.toString())
@@ -289,6 +300,27 @@ class TranslationApiClientImpl(
             "- The bounding box should tightly wrap the original text region.\n" +
             "\n" +
             "Return ONLY a valid JSON array, no markdown, no explanation:\n" +
+            "[{\"original_text\":\"...\",\"translated_text\":\"...\",\"coordinates\":[left,top,right,bottom]}]"
+
+        const val DEFAULT_MERGING_PROMPT = "You are an OCR and translation engine with text merging capability. " +
+            "The image resolution is {{imageWidth}}x{{imageHeight}} pixels.\n" +
+            "\n" +
+            "Your task:\n" +
+            "1. Extract ALL visible text in the image.\n" +
+            "2. Merge nearby text blocks that belong to the same logical content:\n" +
+            "   - Text in the same paragraph/section\n" +
+            "   - Text in the same speech bubble or UI container\n" +
+            "   - Text that flows across multiple lines naturally\n" +
+            "3. Translate each merged text block to {{targetLanguage}}.\n" +
+            "4. Provide bounding box that covers the entire merged region.\n" +
+            "\n" +
+            "Rules:\n" +
+            "- MERGE text blocks that are spatially close and logically related\n" +
+            "- Keep separate text blocks that are clearly independent (e.g., different UI elements)\n" +
+            "- Coordinates must be pixel values covering the full merged region\n" +
+            "- SKIP: page numbers, decorative single characters, navigation elements\n" +
+            "\n" +
+            "Return ONLY a valid JSON array, no markdown:\n" +
             "[{\"original_text\":\"...\",\"translated_text\":\"...\",\"coordinates\":[left,top,right,bottom]}]"
     }
 }

@@ -27,6 +27,8 @@ import com.cw2.cw_1kito.ui.theme.*
 fun LabSettingsScreen(
     streamingEnabled: Boolean,
     onStreamingEnabledChange: (Boolean) -> Unit,
+    textMergingEnabled: Boolean,
+    onTextMergingEnabledChange: (Boolean) -> Unit,
     themeConfig: ThemeConfig = ThemeConfig.DEFAULT,
     onThemeHueChange: (ThemeHue) -> Unit = {},
     onDarkModeChange: (DarkModeOption) -> Unit = {},
@@ -87,6 +89,14 @@ fun LabSettingsScreen(
                 description = "翻译结果逐条显示，减少等待时间",
                 checked = streamingEnabled,
                 onCheckedChange = onStreamingEnabledChange
+            )
+
+            // 文本提取合并开关
+            LabSwitchItem(
+                title = "文本提取合并",
+                description = "将位置靠近的文本合并到同一对象，而非逐句分隔",
+                checked = textMergingEnabled,
+                onCheckedChange = onTextMergingEnabledChange
             )
 
             HorizontalDivider(

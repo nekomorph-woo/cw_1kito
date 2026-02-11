@@ -20,7 +20,10 @@ data class TranslationConfig(
     val temperature: Double = 0.7,
 
     /** 最大 Token 数量 */
-    val maxTokens: Int = 2000
+    val maxTokens: Int = 2000,
+
+    /** 是否使用文本合并 Prompt（用于合并相邻文本块） */
+    val useMergingPrompt: Boolean = false
 ) {
     init {
         require(temperature in 0.0..2.0) {
@@ -42,7 +45,8 @@ data class TranslationConfig(
         val DEFAULT = TranslationConfig(
             model = VlmModel.DEFAULT,
             sourceLanguage = Language.AUTO,
-            targetLanguage = Language.ZH
+            targetLanguage = Language.ZH,
+            useMergingPrompt = false
         )
 
         /**
@@ -53,7 +57,8 @@ data class TranslationConfig(
             sourceLanguage = Language.AUTO,
             targetLanguage = targetLanguage,
             temperature = 0.5,
-            maxTokens = 1000
+            maxTokens = 1000,
+            useMergingPrompt = false
         )
 
         /**
@@ -64,7 +69,8 @@ data class TranslationConfig(
             sourceLanguage = Language.AUTO,
             targetLanguage = targetLanguage,
             temperature = 0.7,
-            maxTokens = 2000
+            maxTokens = 2000,
+            useMergingPrompt = false
         )
     }
 }

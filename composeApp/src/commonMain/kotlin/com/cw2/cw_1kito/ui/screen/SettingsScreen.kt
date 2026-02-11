@@ -16,6 +16,21 @@ import com.cw2.cw_1kito.ui.component.*
 import com.cw2.cw_1kito.ui.theme.ThemeConfig
 
 /**
+ * 提示词标签页枚举
+ */
+enum class PromptTab {
+    Standard,
+    Merging;
+
+    val displayName: String
+        @Composable
+        get() = when (this) {
+            Standard -> "标准翻译"
+            Merging -> "文本合并"
+        }
+}
+
+/**
  * 设置界面 UI 状态
  */
 data class SettingsUiState(
@@ -32,7 +47,10 @@ data class SettingsUiState(
     val streamingEnabled: Boolean = false,
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
-    val themeConfig: ThemeConfig = ThemeConfig.DEFAULT
+    val themeConfig: ThemeConfig = ThemeConfig.DEFAULT,
+    val textMergingEnabled: Boolean = false,
+    val textMergingPrompt: String = "",
+    val selectedPromptTab: PromptTab = PromptTab.Standard
 ) {
     val isApiKeyConfigured: Boolean
         get() = apiKey.isNotEmpty() && isApiKeyValid
@@ -61,6 +79,10 @@ sealed class SettingsEvent {
     data class ThemeHueChanged(val hue: com.cw2.cw_1kito.ui.theme.ThemeHue) : SettingsEvent()
     data class DarkModeChanged(val darkMode: com.cw2.cw_1kito.ui.theme.DarkModeOption) : SettingsEvent()
     data object ResetTheme : SettingsEvent()
+    data class PromptTabChanged(val tab: PromptTab) : SettingsEvent()
+    data class TextMergingPromptChanged(val prompt: String) : SettingsEvent()
+    data object ResetTextMergingPrompt : SettingsEvent()
+    data class TextMergingEnabledChanged(val enabled: Boolean) : SettingsEvent()
 }
 
 /**
@@ -158,8 +180,13 @@ fun SettingsScreen(
             // 提示词配置
             PromptSection(
                 customPrompt = uiState.customPrompt,
+                mergingPrompt = uiState.textMergingPrompt,
+                selectedTab = uiState.selectedPromptTab,
                 onPromptChange = { onEvent(SettingsEvent.PromptChanged(it)) },
-                onResetPrompt = { onEvent(SettingsEvent.ResetPrompt) }
+                onTabChange = { onEvent(SettingsEvent.PromptTabChanged(it)) },
+                onResetPrompt = { onEvent(SettingsEvent.ResetPrompt) },
+                onResetMergingPrompt = { onEvent(SettingsEvent.ResetTextMergingPrompt) },
+                onMergingPromptChange = { onEvent(SettingsEvent.TextMergingPromptChanged(it)) }
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -234,11 +261,21 @@ fun SettingsScreen(
 @Composable
 fun PromptSection(
     customPrompt: String,
+    mergingPrompt: String,
+    selectedTab: PromptTab,
     onPromptChange: (String) -> Unit,
+    onTabChange: (PromptTab) -> Unit,
     onResetPrompt: () -> Unit,
+    onResetMergingPrompt: () -> Unit,
+    onMergingPromptChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isDefault = customPrompt == TranslationApiClientImpl.DEFAULT_PROMPT
+    val isDefaultStandard = customPrompt == TranslationApiClientImpl.DEFAULT_PROMPT
+    val isDefaultMerging = mergingPrompt == TranslationApiClientImpl.DEFAULT_MERGING_PROMPT
+    val currentPrompt = when (selectedTab) {
+        PromptTab.Standard -> customPrompt
+        PromptTab.Merging -> mergingPrompt
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -250,16 +287,38 @@ fun PromptSection(
             color = MaterialTheme.colorScheme.primary
         )
 
+        // Tab 切换
+        TabRow(selectedTabIndex = selectedTab.ordinal) {
+            PromptTab.entries.forEach { tab ->
+                Tab(
+                    selected = selectedTab == tab,
+                    onClick = { onTabChange(tab) },
+                    text = { Text(tab.displayName) }
+                )
+            }
+        }
+
         Text(
-            text = "自定义发送给大模型的提示词。支持模板变量：{{targetLanguage}}、{{imageWidth}}、{{imageHeight}}",
+            text = when (selectedTab) {
+                PromptTab.Standard -> "自定义发送给大模型的提示词。支持模板变量：{{targetLanguage}}、{{imageWidth}}、{{imageHeight}}"
+                PromptTab.Merging -> "用于文本合并模式的后处理提示词，定义如何将相邻文本块合并。"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         OutlinedTextField(
-            value = customPrompt,
-            onValueChange = onPromptChange,
-            label = { Text("提示词") },
+            value = currentPrompt,
+            onValueChange = {
+                when (selectedTab) {
+                    PromptTab.Standard -> onPromptChange(it)
+                    PromptTab.Merging -> onMergingPromptChange(it)
+                }
+            },
+            label = { Text(when (selectedTab) {
+                PromptTab.Standard -> "标准翻译提示词"
+                PromptTab.Merging -> "文本合并提示词"
+            }) },
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 200.dp),
@@ -272,8 +331,16 @@ fun PromptSection(
             horizontalArrangement = Arrangement.End
         ) {
             OutlinedButton(
-                onClick = onResetPrompt,
-                enabled = !isDefault
+                onClick = {
+                    when (selectedTab) {
+                        PromptTab.Standard -> onResetPrompt()
+                        PromptTab.Merging -> onResetMergingPrompt()
+                    }
+                },
+                enabled = when (selectedTab) {
+                    PromptTab.Standard -> !isDefaultStandard
+                    PromptTab.Merging -> !isDefaultMerging
+                }
             ) {
                 Text("重置为默认")
             }

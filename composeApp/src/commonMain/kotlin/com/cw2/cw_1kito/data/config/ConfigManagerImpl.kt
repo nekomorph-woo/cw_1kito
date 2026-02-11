@@ -128,6 +128,8 @@ abstract class ConfigManagerImpl : ConfigManager {
         remove(STREAMING_ENABLED_KEY)
         remove(THEME_HUE_KEY)
         remove(DARK_MODE_KEY)
+        remove(TEXT_MERGING_ENABLED_KEY)
+        remove(TEXT_MERGING_PROMPT_KEY)
     }
 
     override suspend fun getCustomPrompt(): String? {
@@ -165,11 +167,33 @@ abstract class ConfigManagerImpl : ConfigManager {
         saveString(DARK_MODE_KEY, config.darkMode.name)
     }
 
+    override suspend fun getTextMergingEnabled(): Boolean {
+        return getString(TEXT_MERGING_ENABLED_KEY)?.toBoolean() ?: false
+    }
+
+    override suspend fun saveTextMergingEnabled(enabled: Boolean) {
+        saveString(TEXT_MERGING_ENABLED_KEY, enabled.toString())
+    }
+
+    override suspend fun getTextMergingPrompt(): String? {
+        return getString(TEXT_MERGING_PROMPT_KEY)
+    }
+
+    override suspend fun saveTextMergingPrompt(prompt: String?) {
+        if (prompt == null) {
+            remove(TEXT_MERGING_PROMPT_KEY)
+        } else {
+            saveString(TEXT_MERGING_PROMPT_KEY, prompt)
+        }
+    }
+
     companion object {
         private const val CUSTOM_PROMPT_KEY = "custom_prompt"
         private const val STREAMING_ENABLED_KEY = "lab_streaming_enabled"
         private const val THEME_HUE_KEY = "theme_hue"
         private const val DARK_MODE_KEY = "dark_mode"
+        private const val TEXT_MERGING_ENABLED_KEY = "text_merging_enabled"
+        private const val TEXT_MERGING_PROMPT_KEY = "text_merging_prompt"
     }
 }
 
