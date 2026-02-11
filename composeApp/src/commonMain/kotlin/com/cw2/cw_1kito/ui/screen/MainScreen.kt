@@ -24,6 +24,10 @@ fun MainScreen(
         LabSettingsScreen(
             streamingEnabled = uiState.streamingEnabled,
             onStreamingEnabledChange = { onEvent(SettingsEvent.StreamingEnabledChanged(it)) },
+            themeConfig = uiState.themeConfig,
+            onThemeHueChange = { hue -> onEvent(SettingsEvent.ThemeHueChanged(hue)) },
+            onDarkModeChange = { mode -> onEvent(SettingsEvent.DarkModeChanged(mode)) },
+            onResetTheme = { onEvent(SettingsEvent.ResetTheme) },
             onNavigateBack = { showLabSettings = false }
         )
     } else {

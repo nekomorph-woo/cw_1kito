@@ -3,6 +3,7 @@ package com.cw2.cw_1kito.data.config
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.LanguageConfig
 import com.cw2.cw_1kito.model.VlmModel
+import com.cw2.cw_1kito.ui.theme.ThemeConfig
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -68,6 +69,16 @@ interface ConfigManager {
      * 保存流式翻译开关状态
      */
     suspend fun saveStreamingEnabled(enabled: Boolean)
+
+    /**
+     * 获取主题配置
+     */
+    suspend fun getThemeConfig(): ThemeConfig
+
+    /**
+     * 保存主题配置
+     */
+    suspend fun saveThemeConfig(config: ThemeConfig)
 
     /**
      * 清除所有配置

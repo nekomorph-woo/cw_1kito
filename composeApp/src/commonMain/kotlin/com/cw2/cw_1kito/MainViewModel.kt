@@ -9,6 +9,7 @@ import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.permission.PermissionManager
 import com.cw2.cw_1kito.ui.screen.SettingsEvent
 import com.cw2.cw_1kito.ui.screen.SettingsUiState
+import com.cw2.cw_1kito.ui.theme.ThemeConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,6 +71,10 @@ class MainViewModel(
                 // 加载流式翻译开关
                 val streamingEnabled = configManager.getStreamingEnabled()
                 _uiState.update { it.copy(streamingEnabled = streamingEnabled) }
+
+                // 加载主题配置
+                val themeConfig = configManager.getThemeConfig()
+                _uiState.update { it.copy(themeConfig = themeConfig) }
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "加载配置失败", e)
             }
@@ -200,6 +205,39 @@ class MainViewModel(
                         configManager.saveStreamingEnabled(event.enabled)
                     } catch (e: Exception) {
                         android.util.Log.e("MainViewModel", "保存流式翻译设置失败", e)
+                    }
+                }
+            }
+            is SettingsEvent.ThemeHueChanged -> {
+                val newConfig = _uiState.value.themeConfig.copy(hue = event.hue)
+                _uiState.update { it.copy(themeConfig = newConfig) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveThemeConfig(newConfig)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存主题配置失败", e)
+                    }
+                }
+            }
+            is SettingsEvent.DarkModeChanged -> {
+                val newConfig = _uiState.value.themeConfig.copy(darkMode = event.darkMode)
+                _uiState.update { it.copy(themeConfig = newConfig) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveThemeConfig(newConfig)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存主题配置失败", e)
+                    }
+                }
+            }
+            SettingsEvent.ResetTheme -> {
+                val defaultConfig = ThemeConfig.DEFAULT
+                _uiState.update { it.copy(themeConfig = defaultConfig) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveThemeConfig(defaultConfig)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "重置主题配置失败", e)
                     }
                 }
             }

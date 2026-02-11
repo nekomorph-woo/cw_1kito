@@ -10,7 +10,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cw2.cw_1kito.data.config.AndroidConfigManagerImpl
@@ -19,6 +18,7 @@ import com.cw2.cw_1kito.service.capture.ScreenCaptureManager
 import com.cw2.cw_1kito.service.floating.FloatingService
 import com.cw2.cw_1kito.ui.screen.MainScreen
 import com.cw2.cw_1kito.ui.screen.SettingsEvent
+import com.cw2.cw_1kito.ui.theme.KitoTheme
 
 /**
  * 主 Activity
@@ -70,9 +70,9 @@ class MainActivity : ComponentActivity() {
         ScreenCaptureManager.init(applicationContext)
 
         setContent {
-            MaterialTheme {
-                val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+            KitoTheme(themeConfig = uiState.themeConfig) {
                 MainScreen(
                     uiState = uiState,
                     onEvent = { event -> handleEvent(event) }

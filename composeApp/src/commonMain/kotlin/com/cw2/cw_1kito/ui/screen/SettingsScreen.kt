@@ -13,6 +13,7 @@ import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.ui.component.*
+import com.cw2.cw_1kito.ui.theme.ThemeConfig
 
 /**
  * 设置界面 UI 状态
@@ -30,7 +31,8 @@ data class SettingsUiState(
     val canStartService: Boolean = false,
     val streamingEnabled: Boolean = false,
     val isLoading: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val themeConfig: ThemeConfig = ThemeConfig.DEFAULT
 ) {
     val isApiKeyConfigured: Boolean
         get() = apiKey.isNotEmpty() && isApiKeyValid
@@ -56,6 +58,9 @@ sealed class SettingsEvent {
     data object ClearError : SettingsEvent()
     data object NavigateToLab : SettingsEvent()
     data class StreamingEnabledChanged(val enabled: Boolean) : SettingsEvent()
+    data class ThemeHueChanged(val hue: com.cw2.cw_1kito.ui.theme.ThemeHue) : SettingsEvent()
+    data class DarkModeChanged(val darkMode: com.cw2.cw_1kito.ui.theme.DarkModeOption) : SettingsEvent()
+    data object ResetTheme : SettingsEvent()
 }
 
 /**

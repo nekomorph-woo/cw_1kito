@@ -3,6 +3,9 @@ package com.cw2.cw_1kito.data.config
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.LanguageConfig
 import com.cw2.cw_1kito.model.VlmModel
+import com.cw2.cw_1kito.ui.theme.ThemeConfig
+import com.cw2.cw_1kito.ui.theme.ThemeHue
+import com.cw2.cw_1kito.ui.theme.DarkModeOption
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -122,6 +125,9 @@ abstract class ConfigManagerImpl : ConfigManager {
         remove(PreferencesKeys().targetLanguage)
         remove(PreferencesKeys().selectedModel)
         remove(CUSTOM_PROMPT_KEY)
+        remove(STREAMING_ENABLED_KEY)
+        remove(THEME_HUE_KEY)
+        remove(DARK_MODE_KEY)
     }
 
     override suspend fun getCustomPrompt(): String? {
@@ -144,9 +150,26 @@ abstract class ConfigManagerImpl : ConfigManager {
         saveString(STREAMING_ENABLED_KEY, enabled.toString())
     }
 
+    override suspend fun getThemeConfig(): ThemeConfig {
+        val hueName = getString(THEME_HUE_KEY)
+        val darkModeName = getString(DARK_MODE_KEY)
+
+        val hue = ThemeHue.fromName(hueName)
+        val darkMode = DarkModeOption.fromName(darkModeName)
+
+        return ThemeConfig(hue, darkMode)
+    }
+
+    override suspend fun saveThemeConfig(config: ThemeConfig) {
+        saveString(THEME_HUE_KEY, config.hue.name)
+        saveString(DARK_MODE_KEY, config.darkMode.name)
+    }
+
     companion object {
         private const val CUSTOM_PROMPT_KEY = "custom_prompt"
         private const val STREAMING_ENABLED_KEY = "lab_streaming_enabled"
+        private const val THEME_HUE_KEY = "theme_hue"
+        private const val DARK_MODE_KEY = "dark_mode"
     }
 }
 
