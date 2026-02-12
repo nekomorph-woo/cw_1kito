@@ -4,6 +4,7 @@
 > **架构模式:** 单栈 (Kotlin/Android)
 > **UI 框架:** Compose Multiplatform + Material3
 > **创建日期:** 2025-02-10
+> **最后更新:** 2025-02-12
 
 ---
 
@@ -13,10 +14,13 @@
 
 ### 核心功能
 1. **多语言翻译** - 支持中/英/日/韩等多种语言互译
-2. **全局悬浮窗** - 系统级浮动图标，可拖拽
+2. **全局悬浮窗** - 系统级浮动图标，可拖拽、长按关闭、双击关闭覆盖层
 3. **屏幕截图翻译** - MediaProjection API 截图 + 多模态大模型 OCR
-4. **覆盖层绘制** - 在原位置绘制白色背景框 + 翻译文本
-5. **语言配置** - 源语言（自动/指定）和目标语言设置
+4. **流式翻译** - 支持逐条显示翻译结果，减少等待时间
+5. **覆盖层绘制** - 在原位置绘制白色背景框 + 翻译文本
+6. **语言配置** - 源语言（自动/指定）和目标语言设置
+7. **主题定制** - 6 种色调 × 3 种明暗模式 = 18 种主题方案
+8. **文本合并** - 可选功能，将位置靠近的文本合并到同一对象
 
 ---
 
@@ -28,8 +32,12 @@
 | **框架** | Compose Multiplatform | 1.10.0 |
 | **UI 库** | Material3 | 1.10.0-alpha05 |
 | **生命周期** | Lifecycle ViewModel Compose | 2.9.6 |
+| **网络** | Ktor Client | 2.3.8 |
+| **序列化** | Kotlinx Serialization | 1.6.2 |
+| **日志** | Timber | 5.0.1 |
+| **权限** | Accompanist Permissions | 0.36.0 |
 | **构建** | Gradle (Kotlin DSL) | - |
-| **目标平台** | Android (API 24+) | - |
+| **目标平台** | Android (API 24-36) | - |
 | **JVM 目标** | Java 11 | - |
 
 ---
@@ -41,11 +49,30 @@ cw_1Kito/
 ├── composeApp/
 │   └── src/
 │       ├── commonMain/              # 跨平台共享代码
-│       │   └── kotlin/              # Compose UI、业务逻辑
+│       │   └── kotlin/com/cw2/cw_1kito/
+│       │       ├── model/            # 数据模型 (Language, VlmModel, TranslationResult, BoundingBox)
+│       │       ├── ui/              # Compose UI 组件
+│       │       │   ├── screen/      # 页面组件 (MainScreen, SettingsScreen, LabSettingsScreen)
+│       │       │   ├── component/   # 通用组件 (LanguageSelector, ModelSelector, ApiKeySection)
+│       │       │   └── theme/       # 主题系统 (Color.kt, Theme.kt, AppTheme.kt)
+│       │       ├── data/            # 数据层
+│       │       │   ├── api/         # API 客户端 (TranslationApiClient, StreamingJsonParser)
+│       │       │   ├── adapter/     # API 适配器 (SiliconFlowAdapter)
+│       │       │   └── config/      # 配置管理 (ConfigManager)
+│       │       ├── domain/          # 领域层
+│       │       │   ├── coordinate/  # 坐标验证 (CoordinateValidator)
+│       │       │   ├── layout/       # 文本排版引擎 (TextLayoutEngine)
+│       │       │   └── translation/ # 翻译管理器 (TranslationManager)
+│       │       └── permission/      # 权限管理接口
 │       ├── androidMain/             # Android 特定代码
-│       │   ├── kotlin/              # Service、权限、平台 API
-│       │   └── res/                 # Android 资源
-│       └── commonTest/              # 共享测试代码
+│       │   └── kotlin/com/cw2/cw_1kito/
+│       │       ├── service/
+│       │       │   ├── capture/      # 屏幕捕获 (ScreenCaptureManager, ScreenCaptureImpl)
+│       │       │   ├── floating/     # 悬浮窗服务 (FloatingService, FloatingBallView)
+│       │       │   └── overlay/      # 翻译覆盖层 (TranslationOverlayView, OverlayRenderer)
+│       │       ├── data/config/    # Android 配置实现 (AndroidConfigManagerImpl)
+│       │       └── permission/     # Android 权限实现 (PermissionManagerImpl)
+│       └── androidMain/res/         # Android 资源
 ├── gradle/                          # Gradle 配置
 │   └── libs.versions.toml           # 版本目录 (Dep Version Catalog)
 ├── build.gradle.kts                 # 根项目构建配置
@@ -53,11 +80,13 @@ cw_1Kito/
 ```
 
 ### 目录约定
-- `commonMain/kotlin/` - UI 组件、ViewModel、数据模型、业务逻辑
-- `androidMain/kotlin/` - Service 实现、权限处理、MediaProjection、系统 API
-- `commonMain/kotlin/core/` - 核心业务模块（如需要）
-- `commonMain/kotlin/ui/` - Compose UI 组件
-- `commonMain/kotlin/data/` - 数据模型和 Repository
+- `commonMain/kotlin/model/` - 数据模型（Language, VlmModel, TranslationResult, BoundingBox, ThemeConfig）
+- `commonMain/kotlin/ui/` - Compose UI 组件和主题
+- `commonMain/kotlin/data/` - 数据层（API 客户端、配置管理）
+- `commonMain/kotlin/domain/` - 领域层（坐标验证、文本排版、翻译管理）
+- `androidMain/kotlin/service/` - Service 实现、权限处理、MediaProjection、系统 API
+- `androidMain/kotlin/permission/` - Android 权限管理实现
+- `androidMain/res/` - Android 资源
 
 ---
 
@@ -88,12 +117,22 @@ scope.launch {
 
 #### 2. Data Class
 - 使用 `data class` 定义数据模型，简洁且自动生成 equals/hashCode/toString
+- 使用 `@Serializable` 注解支持序列化
 
 ```kotlin
+@Serializable
 data class TranslationResult(
     val originalText: String,
     val translatedText: String,
-    val coordinates: List<Float>  // [x1, y1, x2, y2] 归一化坐标 0-1
+    val boundingBox: BoundingBox
+)
+
+@Serializable
+data class BoundingBox(
+    val left: Float,   // 0.0 - 1.0 归一化坐标
+    val top: Float,    // 0.0 - 1.0
+    val right: Float,  // 0.0 - 1.0
+    val bottom: Float  // 0.0 - 1.0
 )
 ```
 
@@ -114,13 +153,12 @@ fun processResult(result: TranslationResult) { ... }
 
 ```kotlin
 // 扩展函数：归一化坐标转屏幕坐标
-fun List<Float>.toScreenCoords(width: Int, height: Int): Rect {
-    require(this.size == 4) { "坐标必须包含 4 个点" }
+fun BoundingBox.toScreenRect(screenWidth: Int, screenHeight: Int): Rect {
     return Rect(
-        (this[0] * width).toInt(),
-        (this[1] * height).toInt(),
-        (this[2] * width).toInt(),
-        (this[3] * height).toInt()
+        (left * screenWidth).toInt(),
+        (top * screenHeight).toInt(),
+        (right * screenWidth).toInt(),
+        (bottom * screenHeight).toInt()
     )
 }
 ```
@@ -204,7 +242,7 @@ fun TranslationOverlayPreview() {
     MaterialTheme {
         TranslationOverlay(
             results = listOf(
-                TranslationResult("Hello", "你好", listOf(0.1f, 0.1f, 0.5f, 0.2f))
+                TranslationResult("Hello", "你好", BoundingBox(0.1f, 0.1f, 0.5f, 0.2f))
             )
         )
     }
@@ -222,51 +260,42 @@ fun TranslationOverlayPreview() {
 <!-- AndroidManifest.xml -->
 <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-```
-
-#### 检查和请求权限
-```kotlin
-// 检查悬浮窗权限
-fun hasOverlayPermission(context: Context): Boolean {
-    return Settings.canDrawOverlays(context)
-}
-
-// 请求悬浮窗权限（需要引导用户到系统设置）
-fun requestOverlayPermission(context: Context) {
-    val intent = Intent(
-        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-        Uri.parse("package:${context.packageName}")
-    )
-    context.startActivity(intent)
-}
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 ```
 
 #### 悬浮窗 Service 实现
 ```kotlin
-// 在 androidMain/kotlin/ 中实现
+// FloatingService.kt - 完整实现已存在于项目
 class FloatingService : Service() {
     private lateinit var windowManager: WindowManager
-    private var floatingView: View? = null
+    private var floatingView: FloatingBallView? = null
+    private var overlayView: TranslationOverlayView? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        addFloatingView()
+        configManager = AndroidConfigManagerImpl(applicationContext)
+        ScreenCaptureManager.init(this)
+        createNotificationChannel()
     }
 
     private fun addFloatingView() {
-        floatingView = createFloatingView()
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        )
+        floatingView = FloatingBallView(this, windowManager).apply {
+            setOnClickListener { onFloatingBallClicked() }
+            setOnLongClickListener { onFloatingBallLongPressed() }
+        }
+        val params = createFloatingLayoutParams()
         windowManager.addView(floatingView, params)
     }
 }
 ```
+
+#### 悬浮球特性
+- **拖拽**: 支持自由拖拽，释放后自动吸附到左右边缘
+- **长按**: 长按关闭悬浮窗服务
+- **状态动画**: 空闲(呼吸)、加载(脉冲+旋转)、成功(绿色对勾)、错误(红色叉号)
+- **双层阴影**: 外阴影 + 内发光效果
 
 ---
 
@@ -279,29 +308,31 @@ class FloatingService : Service() {
 
 #### 截图流程
 ```kotlin
-// 1. 请求截图权限
+// 1. 初始化 ScreenCaptureManager
+ScreenCaptureManager.init(context)
+
+// 2. 请求截图权限（在 Activity 中）
 val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 val intent = projectionManager.createScreenCaptureIntent()
 startActivityForResult(intent, SCREEN_CAPTURE_REQUEST_CODE)
 
-// 2. 在 onActivityResult 中获取 MediaProjection
+// 3. 在 onActivityResult 中获取 MediaProjection
 override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     if (requestCode == SCREEN_CAPTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
-        val mediaProjection = projectionManager.getMediaProjection(resultCode, data!!)
-        startCapture(mediaProjection)
+        ScreenCaptureManager.setMediaProjection(resultCode, data)
     }
 }
 
-// 3. 创建 VirtualDisplay 并捕获画面
-private fun startCapture(mediaProjection: MediaProjection) {
-    val imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-    val virtualDisplay = mediaProjection.createVirtualDisplay(
-        "ScreenCapture",
-        width, height, density,
-        VIRTUAL_DISPLAY_FLAGS,
-        imageReader.surface,
-        null, null
-    )
+// 4. 执行截图
+val result = ScreenCaptureManager.captureScreen()
+when (result) {
+    is CaptureResult.Success -> {
+        val imageBytes = result.imageBytes
+        // 处理截图数据
+    }
+    is CaptureResult.PermissionDenied -> {
+        // 权限过期，需要重新授权
+    }
 }
 ```
 
@@ -309,37 +340,33 @@ private fun startCapture(mediaProjection: MediaProjection) {
 
 ## 网络层设计
 
-### API 抽象（保持灵活，支持多种 LLM）
+### API 抽象（支持多种 LLM）
 
 ```kotlin
-// 定义通用接口，便于切换不同 LLM 提供商
-interface TranslationApi {
-    suspend fun translateWithOCR(
-        imageBytes: ByteArray,
-        sourceLanguage: Language,
-        targetLanguage: Language
-    ): List<TranslationResult>
-}
-
-enum class Language(val code: String, val displayName: String) {
-    AUTO("auto", "自动识别"),
-    ENGLISH("en", "English"),
-    CHINESE("zh", "中文"),
-    JAPANESE("ja", "日本語"),
-    KOREAN("ko", "한국어");
+interface TranslationApiClient {
+    fun setApiKey(apiKey: String)
+    fun getApiKey(): String?
+    suspend fun translate(request: TranslationApiRequest): SiliconFlowResponse
+    suspend fun validateApiKey(apiKey: String): Boolean
+    fun translateStream(request: TranslationApiRequest): Flow<String>
 }
 ```
 
-### 网络库
-- 使用 Ktor 或 OkHttp 进行 HTTP 请求
-- 使用 Kotlinx Serialization 进行 JSON 解析
+### 流式翻译
+- 使用 Ktor 的 `preparePost` + `execute` 获取 SSE 流
+- `StreamingJsonParser` 使用状态机增量解析 JSON 对象
+- 支持实时增量渲染到覆盖层
 
 ```kotlin
-// build.gradle.kts 依赖
-dependencies {
-    implementation("io.ktor:ktor-client-core:2.3.8")
-    implementation("io.ktor:ktor-client-cio:2.3.8")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+// 流式翻译流程
+val parser = StreamingJsonParser()
+apiClient.translateStream(request).collect { token ->
+    for (jsonStr in parser.feed(token)) {
+        val result = parseOneResult(jsonStr)
+        withContext(Dispatchers.Main) {
+            overlayView?.addResult(result)  // 增量添加
+        }
+    }
 }
 ```
 
@@ -347,28 +374,155 @@ dependencies {
 
 ## 坐标系统规范
 
-### 坐标归一化
-- 大模型返回的坐标应为**归一化坐标** (0.0 - 1.0)
-- 绘制时需转换为实际屏幕像素
+### 坐标模式检测
+项目支持多种坐标模式，自动检测：
 
 ```kotlin
-// 归一化坐标转屏幕坐标
-data class NormalizedRect(
-    val left: Float,   // 0.0 - 1.0
-    val top: Float,    // 0.0 - 1.0
-    val right: Float,  // 0.0 - 1.0
-    val bottom: Float  // 0.0 - 1.0
-) {
-    fun toScreenRect(screenWidth: Int, screenHeight: Int): Rect {
-        return Rect(
-            (left * screenWidth).toInt(),
-            (top * screenHeight).toInt(),
-            (right * screenWidth).toInt(),
-            (bottom * screenHeight).toInt()
-        )
+enum class CoordinateMode {
+    PENDING,           // 等待判断
+    NORMALIZED_1000,   // 0-1000 归一化（GLM 系列）
+    PIXEL              // 像素坐标
+}
+
+// 自动检测
+fun detectCoordinateMode(coords: List<Int>, imageWidth: Int, imageHeight: Int): CoordinateMode {
+    val maxVal = coords.max()
+    return when {
+        maxVal <= 1000 -> CoordinateMode.NORMALIZED_1000
+        else -> CoordinateMode.PIXEL
     }
 }
 ```
+
+### 坐标存储
+- 内部统一使用 **归一化 0-1 坐标**存储
+- 绘制时转换为实际屏幕像素
+
+```kotlin
+// 像素转归一化（存储）
+val boundingBox = BoundingBox(
+    left = pixelLeft / screenWidth.toFloat(),
+    top = pixelTop / screenHeight.toFloat(),
+    right = pixelRight / screenWidth.toFloat(),
+    bottom = pixelBottom / screenHeight.toFloat()
+)
+
+// 归一化转像素（绘制）
+val rect = boundingBox.toScreenRect(screenWidth, screenHeight)
+```
+
+---
+
+## 主题系统
+
+### 主题配置
+```kotlin
+data class ThemeConfig(
+    val hue: ThemeHue = ThemeHue.DEFAULT,
+    val darkMode: DarkModeOption = DarkModeOption.FOLLOW_SYSTEM
+) {
+    companion object {
+        val DEFAULT = ThemeConfig()
+    }
+}
+
+enum class ThemeHue(val displayName: String, val seedColor: Color) {
+    DEFAULT("默认蓝", Color(0xFF4285F4)),
+    TEAL("青色", Color(0xFF006A6A)),
+    VIOLET("紫罗兰", Color(0xFF7B5EA7)),
+    ROSE("玫瑰", Color(0xFFB4637A)),
+    FOREST("森林", Color(0xFF4A7C59)),
+    AMBER("琥珀", Color(0xFFC77B00))
+}
+
+enum class DarkModeOption(val displayName: String) {
+    FOLLOW_SYSTEM("跟随系统"),
+    ALWAYS_LIGHT("浅色"),
+    ALWAYS_DARK("深色")
+}
+```
+
+### 主题应用
+```kotlin
+@Composable
+fun KitoTheme(
+    themeConfig: ThemeConfig = ThemeConfig.DEFAULT,
+    content: @Composable () -> Unit
+) {
+    val isDark = when (themeConfig.darkMode) {
+        DarkModeOption.FOLLOW_SYSTEM -> isSystemInDarkTheme()
+        DarkModeOption.ALWAYS_LIGHT -> false
+        DarkModeOption.ALWAYS_DARK -> true
+    }
+    val colorScheme = getColorScheme(themeConfig.hue, isDark)
+    MaterialTheme(colorScheme = colorScheme, content = content)
+}
+```
+
+---
+
+## VLM 模型支持
+
+```kotlin
+enum class VlmModel(val id: String, val displayName: String) {
+    GLM_4_6V("zai-org/GLM-4.6V", "GLM-4.6V"),
+    GLM_4_5V("zai-org/GLM-4.5V", "GLM-4.5V"),
+    QWEN3_VL_32B("Qwen/Qwen3-VL-32B-Instruct", "Qwen3-VL-32B"),
+    QWEN3_VL_30B("Qwen/Qwen3-VL-30B-A3B-Instruct", "Qwen3-VL-30B"),
+    QWEN3_VL_235B("Qwen/Qwen3-VL-235B-A22B-Instruct", "Qwen3-VL-235B"),
+    QWEN2_5_VL_32B("Qwen/Qwen2.5-VL-32B-Instruct", "Qwen2.5-VL-32B"),
+    QWEN2_5_VL_72B("Qwen/Qwen2.5-VL-72B-Instruct", "Qwen2.5-VL-72B");
+
+    companion object {
+        val DEFAULT = GLM_4_6V
+    }
+}
+```
+
+---
+
+## 实验室功能
+
+### 流式翻译
+- 逐条显示翻译结果，减少等待时间
+- 通过 `StreamingJsonParser` 增量解析 SSE 响应
+- 覆盖层支持 `addResult()` 动态添加
+
+### 文本合并
+- 将位置靠近的文本合并到同一对象
+- 使用专门的 Prompt 模板 (`DEFAULT_MERGING_PROMPT`)
+- 通过 `TranslationConfig.useMergingPrompt` 控制
+
+### 主题定制
+- 6 种色调（默认蓝、青色、紫罗兰、玫瑰、森林、琥珀）
+- 3 种明暗模式（跟随系统、浅色、深色）
+- 18 种主题组合，支持预览
+
+---
+
+## 翻译覆盖层
+
+### 覆盖层视图
+```kotlin
+class TranslationOverlayView(
+    context: Context,
+    initialResults: List<TranslationResult>,
+    screenWidth: Int,
+    screenHeight: Int,
+    onDismiss: () -> Unit
+) : View(context) {
+    // 支持增量添加（流式模式）
+    fun addResult(result: TranslationResult)
+
+    // 双击关闭
+    override fun onTouchEvent(event: MotionEvent): Boolean
+}
+```
+
+### 绘制引擎
+- `OverlayRenderer`: 负责实际绘制逻辑
+- 支持自适应字号、多行排版
+- 使用 `TextLayoutEngine` 计算文本布局
 
 ---
 
@@ -396,30 +550,6 @@ local.properties
 
 ---
 
-## 开发流程建议
-
-### 阶段 1: MVP 验证
-1. 创建主界面（语言选择、启动按钮）
-2. 实现图片选择 + API 调用（验证 Prompt 效果）
-3. 简单的绘制层展示翻译结果
-
-### 阶段 2: 悬浮窗
-1. 实现 FloatingService
-2. 添加悬浮球（可拖拽）
-3. 处理权限检查和引导
-
-### 阶段 3: 截图集成
-1. 集成 MediaProjection
-2. 实现截图和图像预处理
-3. 连接网络层
-
-### 阶段 4: 覆盖层绘制
-1. 坐标转换逻辑
-2. 自适应文字排版
-3. 性能优化
-
----
-
 ## 命令速查
 
 ### 构建和运行
@@ -440,10 +570,12 @@ local.properties
 
 1. **性能**: 截图 + 网络请求存在延迟，需添加加载状态提示
 2. **电池优化**: 引导用户关闭电池优化，防止服务被杀
-3. **坐标准确性**: 大模型返回的坐标可能有偏差，需测试验证
-4. **文字排版**: 翻译后文本长度变化，需考虑字体自适应或框体扩展
-5. **隐私保护**: 截图数据需妥善处理，不应在本地持久化存储
+3. **坐标准确性**: 大模型返回的坐标可能有偏差，已实现自动检测和转换
+4. **文字排版**: 翻译后文本长度变化，使用 `TextLayoutEngine` 自适应排版
+5. **隐私保护**: 截图数据不持久化存储
+6. **权限过期**: MediaProjection token 只能使用一次，权限过期后需重新授权
+7. **API 34+**: 需要指定前台服务类型 (`FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION | SPECIAL_USE`)
 
 ---
 
-> 本文档由 Code Cock 自动生成，如有问题请根据项目实际情况调整。
+> 本文档由 Code Cock 自动生成和维护，最后同步于 2025-02-12。
