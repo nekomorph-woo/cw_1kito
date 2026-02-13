@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.data.config.ConfigManager
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.LanguageModelState
 import com.cw2.cw_1kito.model.OcrLanguage
 import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.model.LlmModel
@@ -112,6 +113,10 @@ class MainViewModel(
                 // 加载云端 LLM 提示词
                 val cloudLlmPrompt = configManager.getCustomTranslationPrompt()
                 _uiState.update { it.copy(cloudLlmPrompt = cloudLlmPrompt) }
+
+                // 加载合并阈值配置
+                val mergingConfig = configManager.getMergingConfig()
+                _uiState.update { it.copy(mergingConfig = mergingConfig) }
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "加载配置失败", e)
             }
@@ -421,6 +426,24 @@ class MainViewModel(
             is SettingsEvent.DeleteLanguagePackFor -> {
                 // 删除指定语言包，由 MainActivity 处理实际删除
             }
+            is SettingsEvent.DownloadLanguageModel -> {
+                // 下载单个语言模型，由 MainActivity 处理实际下载
+            }
+            is SettingsEvent.DeleteLanguageModel -> {
+                // 删除单个语言模型，由 MainActivity 处理实际删除
+            }
+            // ========== 合并配置事件处理 ==========
+            is SettingsEvent.MergingConfigChanged -> {
+                _uiState.update { it.copy(mergingConfig = event.config) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveMergingConfig(event.config)
+                        android.util.Log.d("MainViewModel", "合并配置已保存: ${event.config}")
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存合并配置失败", e)
+                    }
+                }
+            }
         }
     }
 
@@ -594,6 +617,37 @@ class MainViewModel(
                 }
             }
             state.copy(languagePackStates = updatedStates)
+        }
+    }
+
+    // ========== 语言模型管理（新） ==========
+
+    /**
+     * 更新语言模型状态列表
+     */
+    fun updateLanguageModelStates(states: List<LanguageModelState>) {
+        _uiState.update { it.copy(languageModelStates = states) }
+    }
+
+    /**
+     * 更新单个语言模型的状态
+     */
+    fun updateSingleLanguageModelStatus(
+        language: Language,
+        status: com.cw2.cw_1kito.model.LanguagePackStatus,
+        errorMessage: String? = null
+    ) {
+        _uiState.update { state ->
+            val currentStates = state.languageModelStates
+                ?: com.cw2.cw_1kito.model.getDefaultLanguageModelStates()
+            val updatedStates = currentStates.map { model ->
+                if (model.language == language) {
+                    model.copy(status = status, errorMessage = errorMessage)
+                } else {
+                    model
+                }
+            }
+            state.copy(languageModelStates = updatedStates)
         }
     }
 }

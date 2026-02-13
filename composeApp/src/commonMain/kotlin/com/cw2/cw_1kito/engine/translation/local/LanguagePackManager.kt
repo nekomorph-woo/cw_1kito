@@ -1,6 +1,7 @@
 package com.cw2.cw_1kito.engine.translation.local
 
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.LanguageModelState
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -134,6 +135,28 @@ interface ILanguagePackManager {
      * 手动触发状态检查，更新缓存的下载状态。
      */
     suspend fun refreshStates()
+
+    // ========== 语言模型管理（新） ==========
+
+    /**
+     * 获取单个语言模型的下载状态
+     */
+    suspend fun isLanguageModelDownloaded(language: Language): Boolean
+
+    /**
+     * 下载单个语言模型
+     */
+    suspend fun downloadLanguageModel(language: Language, requireWifi: Boolean = false): DownloadResult
+
+    /**
+     * 删除单个语言模型
+     */
+    suspend fun deleteLanguageModel(language: Language): Boolean
+
+    /**
+     * 获取所有支持的语言模型状态
+     */
+    suspend fun getLanguageModelStates(): List<LanguageModelState>
 }
 
 /**

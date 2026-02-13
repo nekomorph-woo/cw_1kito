@@ -2,6 +2,9 @@ package com.cw2.cw_1kito.engine.translation.local
 
 import android.content.Context
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.LanguageModelState
+import com.cw2.cw_1kito.model.LanguagePackStatus
+import com.cw2.cw_1kito.model.estimatedModelSizeBytes
 import com.cw2.cw_1kito.util.Logger
 import com.cw2.cw_1kito.util.NetworkUtils
 import com.google.mlkit.common.model.DownloadConditions
@@ -293,9 +296,9 @@ class MLKitLanguagePackManager(
     /**
      * 删除指定语言对
      *
-     * 注意：只有当语言模型不被其他已下载的语言对使用时，才会真正删除模型。
-     * 例如：如果 ZH->EN 和 ZH->JA 都已下载，删除 ZH->EN 时不会删除 ZH 模型，
-     * 因为 ZH->JA 仍然需要它。但 EN 模型如果没有其他语言对使用，则会被删除。
+     * 删除该语言对所需的源语言和目标语言模型。
+     * 注意：如果其他语言对也使用了相同的模型，这些语言对也会变为不可用状态。
+     * 删除后会通过 refreshStates() 自动更新所有受影响的语言对状态。
      */
     override suspend fun deleteLanguagePair(
         sourceLang: Language,
@@ -312,43 +315,20 @@ class MLKitLanguagePackManager(
         }
 
         try {
-            // 找出哪些其他已下载的语言对也在使用这些模型
-            val otherPairsUsingSource = mutableListOf<Pair<Language, Language>>()
-            val otherPairsUsingTarget = mutableListOf<Pair<Language, Language>>()
-
-            for ((s, t) in commonLanguagePairs) {
-                if (s == sourceLang && t == targetLang) continue // 跳过当前要删除的语言对
-
-                val state = getLanguagePackState(s, t)
-                if (state.status == DownloadStatus.DOWNLOADED) {
-                    if (s.toTranslateLanguage() == sourceCode || t.toTranslateLanguage() == sourceCode) {
-                        otherPairsUsingSource.add(s to t)
-                    }
-                    if (s.toTranslateLanguage() == targetCode || t.toTranslateLanguage() == targetCode) {
-                        otherPairsUsingTarget.add(s to t)
-                    }
-                }
-            }
-
-            // 只删除没有被其他语言对使用的模型
             val sourceModel = TranslateRemoteModel.Builder(sourceCode).build()
-            if (otherPairsUsingSource.isEmpty() && isModelDownloaded(sourceModel)) {
+            val targetModel = TranslateRemoteModel.Builder(targetCode).build()
+
+            // 删除源语言模型
+            if (isModelDownloaded(sourceModel)) {
                 deleteModel(sourceModel)
                 Logger.d("[LangPack] 已删除源语言模型：$sourceCode")
-            } else if (otherPairsUsingSource.isNotEmpty()) {
-                Logger.d("[LangPack] 源语言模型 $sourceCode 被其他语言对使用，保留")
             }
 
-            val targetModel = TranslateRemoteModel.Builder(targetCode).build()
-            if (otherPairsUsingTarget.isEmpty() && isModelDownloaded(targetModel)) {
+            // 删除目标语言模型
+            if (isModelDownloaded(targetModel)) {
                 deleteModel(targetModel)
                 Logger.d("[LangPack] 已删除目标语言模型：$targetCode")
-            } else if (otherPairsUsingTarget.isNotEmpty()) {
-                Logger.d("[LangPack] 目标语言模型 $targetCode 被其他语言对使用，保留")
             }
-
-            // 更新当前语言对状态
-            updateLanguagePairStatus(sourceLang, targetLang, DownloadStatus.NOT_DOWNLOADED)
 
             Logger.i("[LangPack] 语言对删除成功")
             true
@@ -421,6 +401,81 @@ class MLKitLanguagePackManager(
         }
 
         Logger.d("[LangPack] 状态刷新完成，共 ${newStates.size} 个语言对")
+    }
+
+    // ========== 语言模型管理（新） ==========
+
+    override suspend fun isLanguageModelDownloaded(language: Language): Boolean = withContext(Dispatchers.IO) {
+        val langCode = language.toTranslateLanguage() ?: return@withContext false
+        val model = TranslateRemoteModel.Builder(langCode).build()
+        isModelDownloaded(model)
+    }
+
+    override suspend fun downloadLanguageModel(language: Language, requireWifi: Boolean): DownloadResult = withContext(Dispatchers.IO) {
+        Logger.d("[LangPack] 开始下载语言模型：${language.code}")
+
+        val langCode = language.toTranslateLanguage()
+        if (langCode == null) {
+            Logger.w("[LangPack] 不支持的语言：${language.code}")
+            return@withContext DownloadResult.UnsupportedLanguage
+        }
+
+        try {
+            val model = TranslateRemoteModel.Builder(langCode).build()
+            if (isModelDownloaded(model)) {
+                Logger.d("[LangPack] 模型已存在：${language.code}")
+                return@withContext DownloadResult.Success(estimateModelSize(langCode))
+            }
+            val size = downloadModel(model, requireWifi)
+            Logger.i("[LangPack] 语言模型下载成功：${language.code}")
+            DownloadResult.Success(size)
+        } catch (e: Exception) {
+            Logger.e(e, "[LangPack] 语言模型下载失败：${language.code}")
+            DownloadResult.Failed(e)
+        }
+    }
+
+    override suspend fun deleteLanguageModel(language: Language): Boolean = withContext(Dispatchers.IO) {
+        Logger.d("[LangPack] 删除语言模型：${language.code}")
+
+        val langCode = language.toTranslateLanguage()
+        if (langCode == null) {
+            Logger.w("[LangPack] 不支持的语言：${language.code}")
+            return@withContext false
+        }
+
+        try {
+            val model = TranslateRemoteModel.Builder(langCode).build()
+            if (isModelDownloaded(model)) {
+                deleteModel(model)
+                Logger.i("[LangPack] 语言模型删除成功：${language.code}")
+            }
+            true
+        } catch (e: Exception) {
+            Logger.e(e, "[LangPack] 语言模型删除失败：${language.code}")
+            false
+        }
+    }
+
+    override suspend fun getLanguageModelStates(): List<LanguageModelState> = withContext(Dispatchers.IO) {
+        val supportedLanguages = listOf(Language.ZH, Language.EN, Language.JA, Language.KO)
+        supportedLanguages.map { lang ->
+            val langCode = lang.toTranslateLanguage()
+            val downloaded = if (langCode != null) {
+                try {
+                    val model = TranslateRemoteModel.Builder(langCode).build()
+                    isModelDownloaded(model)
+                } catch (e: Exception) {
+                    false
+                }
+            } else false
+
+            LanguageModelState(
+                language = lang,
+                status = if (downloaded) LanguagePackStatus.DOWNLOADED else LanguagePackStatus.NOT_DOWNLOADED,
+                sizeBytes = if (downloaded) estimateModelSize(langCode ?: "") else lang.estimatedModelSizeBytes()
+            )
+        }
     }
 
     // ========== 私有辅助方法 ==========

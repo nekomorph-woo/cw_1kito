@@ -13,12 +13,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,55 +35,57 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cw2.cw_1kito.model.Language
-import com.cw2.cw_1kito.model.LanguagePackState
+import com.cw2.cw_1kito.model.LanguageModelState
 import com.cw2.cw_1kito.model.LanguagePackStatus
-import com.cw2.cw_1kito.model.calculateTotalStorage
+import com.cw2.cw_1kito.model.calculateModelTotalStorage
+import com.cw2.cw_1kito.model.computeAffectedPairs
+import com.cw2.cw_1kito.model.computeAvailablePairs
+import com.cw2.cw_1kito.model.formatAvailablePairs
 import com.cw2.cw_1kito.model.formatBytes
 
 /**
- * 语言包管理页面
- *
- * 显示已下载的语言包并支持管理操作
- *
- * @param languagePackStates 语言包状态列表
- * @param totalStorageUsed 总存储占用（可选，默认自动计算）
- * @param onDownload 下载语言包回调
- * @param onDelete 删除语言包回调
- * @param onNavigateBack 返回回调
- * @param modifier 修饰符
+ * 语言包管理页面（以语言模型为单位）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LanguagePackManagementScreen(
-    languagePackStates: List<LanguagePackState>,
-    totalStorageUsed: String? = null,
-    onDownload: (Language, Language) -> Unit,
-    onDelete: (Language, Language) -> Unit,
+    languageModelStates: List<LanguageModelState>,
+    onDownloadModel: (Language) -> Unit,
+    onDeleteModel: (Language) -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val calculatedStorage = formatBytes(calculateTotalStorage(languagePackStates))
+    val totalStorage = formatBytes(calculateModelTotalStorage(languageModelStates))
+    val availablePairs = computeAvailablePairs(languageModelStates)
+    val availablePairsText = formatAvailablePairs(availablePairs)
 
     // 删除确认弹框状态
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var pendingDeleteSource by remember { mutableStateOf<Language?>(null) }
-    var pendingDeleteTarget by remember { mutableStateOf<Language?>(null) }
+    var pendingDeleteLanguage by remember { mutableStateOf<Language?>(null) }
 
     // 删除确认弹框
-    if (showDeleteDialog && pendingDeleteSource != null && pendingDeleteTarget != null) {
+    if (showDeleteDialog && pendingDeleteLanguage != null) {
+        val lang = pendingDeleteLanguage!!
+        val affected = computeAffectedPairs(lang, languageModelStates)
+        val affectedText = if (affected.isNotEmpty()) {
+            "\n\n删除后以下翻译方向将不可用：\n" +
+                affected.joinToString(", ") { (a, b) ->
+                    "${a.displayName} ↔ ${b.displayName}"
+                }
+        } else ""
+
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("确认删除") },
             text = {
-                Text("确定要删除「${pendingDeleteSource!!.displayName} → ${pendingDeleteTarget!!.displayName}」语言包吗？\n\n删除后需要重新下载才能使用本地翻译。")
+                Text("确定要删除「${lang.displayName}」语言模型吗？$affectedText")
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onDelete(pendingDeleteSource!!, pendingDeleteTarget!!)
+                        onDeleteModel(lang)
                         showDeleteDialog = false
-                        pendingDeleteSource = null
-                        pendingDeleteTarget = null
+                        pendingDeleteLanguage = null
                     }
                 ) {
                     Text("删除", color = MaterialTheme.colorScheme.error)
@@ -121,22 +121,22 @@ fun LanguagePackManagementScreen(
                 .fillMaxSize()
         ) {
             // 存储占用卡片
-            StorageUsageCard(
-                totalStorageUsed = totalStorageUsed ?: calculatedStorage
-            )
+            StorageUsageCard(totalStorageUsed = totalStorage)
 
             // 说明文案
             LanguagePackInfoCard()
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // 可用语言对文案
+            AvailablePairsCard(text = availablePairsText)
 
-            // 语言包列表
-            LanguagePackList(
-                states = languagePackStates,
-                onDownload = onDownload,
-                onDelete = { source, target ->
-                    pendingDeleteSource = source
-                    pendingDeleteTarget = target
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 语言模型列表
+            LanguageModelList(
+                states = languageModelStates,
+                onDownload = onDownloadModel,
+                onDelete = { lang ->
+                    pendingDeleteLanguage = lang
                     showDeleteDialog = true
                 }
             )
@@ -202,8 +202,8 @@ private fun LanguagePackInfoCard(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
-                text = "语言包用于本地翻译，下载后无需联网即可翻译。每个语言模型约 10-30 MB，" +
-                    "同一语言的模型在多个语言对之间共享（如「中→英」和「中→日」共用中文模型）。" +
+                text = "语言包用于本地翻译，下载后无需联网即可翻译。" +
+                    "下载任意两个语言模型即可实现双向翻译。" +
                     "首次下载需要网络连接，建议在 Wi-Fi 环境下进行。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -213,72 +213,78 @@ private fun LanguagePackInfoCard(
 }
 
 /**
- * 语言包列表
+ * 可用语言对文案卡片
  */
 @Composable
-private fun LanguagePackList(
-    states: List<LanguagePackState>,
-    onDownload: (Language, Language) -> Unit,
-    onDelete: (Language, Language) -> Unit,
+private fun AvailablePairsCard(
+    text: String,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.padding(horizontal = 16.dp)) {
-        Text(
-            text = "语言包列表",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        if (states.isEmpty()) {
-            EmptyState()
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(states) { state ->
-                    LanguagePackItem(
-                        state = state,
-                        onDownload = { onDownload(state.sourceLang, state.targetLang) },
-                        onDelete = { onDelete(state.sourceLang, state.targetLang) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 空状态提示
- */
-@Composable
-private fun EmptyState() {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
         )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(12.dp)
         ) {
             Text(
-                text = "暂无语言包",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = "当前可用翻译方向：",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
             )
         }
     }
 }
 
 /**
- * 语言包列表项
+ * 语言模型列表
  */
 @Composable
-private fun LanguagePackItem(
-    state: LanguagePackState,
+private fun LanguageModelList(
+    states: List<LanguageModelState>,
+    onDownload: (Language) -> Unit,
+    onDelete: (Language) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.padding(horizontal = 16.dp)) {
+        Text(
+            text = "语言模型列表",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(states) { state ->
+                LanguageModelItem(
+                    state = state,
+                    onDownload = { onDownload(state.language) },
+                    onDelete = { onDelete(state.language) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 语言模型列表项
+ */
+@Composable
+private fun LanguageModelItem(
+    state: LanguageModelState,
     onDownload: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
@@ -292,7 +298,6 @@ private fun LanguagePackItem(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            // 标题行
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -304,24 +309,22 @@ private fun LanguagePackItem(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "${state.sourceLang.displayName} → ${state.targetLang.displayName}",
+                            text = "${state.language.displayName} (${state.language.code})",
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        StatusChip(state.status)
+                        ModelStatusChip(state.status)
                     }
                     Text(
-                        text = state.formattedSize,
+                        text = "~${state.formattedSize}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                // 操作按钮
-                ActionButton(
+                ModelActionButton(
                     status = state.status,
-                    downloadProgress = state.downloadProgress,
                     onDownload = onDownload,
                     onDelete = onDelete
                 )
@@ -330,9 +333,7 @@ private fun LanguagePackItem(
             // 下载进度条
             if (state.status == LanguagePackStatus.DOWNLOADING) {
                 Spacer(modifier = Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Text(
                     text = "正在下载...",
                     style = MaterialTheme.typography.bodySmall,
@@ -354,10 +355,10 @@ private fun LanguagePackItem(
 }
 
 /**
- * 状态芯片
+ * 模型状态芯片
  */
 @Composable
-private fun StatusChip(status: LanguagePackStatus) {
+private fun ModelStatusChip(status: LanguagePackStatus) {
     val (text, color) = when (status) {
         LanguagePackStatus.DOWNLOADED -> "已下载" to MaterialTheme.colorScheme.primary
         LanguagePackStatus.DOWNLOADING -> "下载中" to MaterialTheme.colorScheme.tertiary
@@ -379,22 +380,18 @@ private fun StatusChip(status: LanguagePackStatus) {
 }
 
 /**
- * 操作按钮
+ * 模型操作按钮
  */
 @Composable
-private fun ActionButton(
+private fun ModelActionButton(
     status: LanguagePackStatus,
-    downloadProgress: Float,
     onDownload: () -> Unit,
     onDelete: () -> Unit
 ) {
     when (status) {
         LanguagePackStatus.DOWNLOADED -> {
             TextButton(onClick = onDelete) {
-                Text(
-                    text = "删除",
-                    color = MaterialTheme.colorScheme.error
-                )
+                Text("删除", color = MaterialTheme.colorScheme.error)
             }
         }
         LanguagePackStatus.DOWNLOADING -> {

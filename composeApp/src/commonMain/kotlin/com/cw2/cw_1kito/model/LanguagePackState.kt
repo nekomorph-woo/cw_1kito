@@ -157,3 +157,97 @@ fun getDefaultLanguagePackStates(): List<LanguagePackState> {
         )
     )
 }
+
+// ========== 语言模型管理（新） ==========
+
+/**
+ * 单个语言模型的状态
+ *
+ * 以"语言模型"为单位管理，而非"语言对"。
+ * ML Kit 底层以语言模型为单位存储，两个已下载的模型即可组成双向翻译对。
+ */
+@Serializable
+data class LanguageModelState(
+    val language: Language,
+    val status: LanguagePackStatus = LanguagePackStatus.NOT_DOWNLOADED,
+    val sizeBytes: Long = 0L,
+    val errorMessage: String? = null
+) {
+    val formattedSize: String
+        get() = formatBytes(sizeBytes)
+
+    val isDownloaded: Boolean
+        get() = status == LanguagePackStatus.DOWNLOADED
+}
+
+/**
+ * 语言模型的估算大小（字节）
+ */
+fun Language.estimatedModelSizeBytes(): Long = when (this) {
+    Language.ZH -> 25 * 1024 * 1024L
+    Language.EN -> 15 * 1024 * 1024L
+    Language.JA -> 20 * 1024 * 1024L
+    Language.KO -> 18 * 1024 * 1024L
+    else -> 20 * 1024 * 1024L
+}
+
+/**
+ * 获取默认的语言模型状态列表（ZH/EN/JA/KO）
+ */
+fun getDefaultLanguageModelStates(): List<LanguageModelState> {
+    return listOf(Language.ZH, Language.EN, Language.JA, Language.KO).map { lang ->
+        LanguageModelState(
+            language = lang,
+            status = LanguagePackStatus.NOT_DOWNLOADED,
+            sizeBytes = lang.estimatedModelSizeBytes()
+        )
+    }
+}
+
+/**
+ * 根据已下载的模型计算可用语言对（两两组合）
+ */
+fun computeAvailablePairs(models: List<LanguageModelState>): List<Pair<Language, Language>> {
+    val downloaded = models.filter { it.isDownloaded }.map { it.language }
+    if (downloaded.size < 2) return emptyList()
+    val pairs = mutableListOf<Pair<Language, Language>>()
+    for (i in downloaded.indices) {
+        for (j in i + 1 until downloaded.size) {
+            pairs.add(downloaded[i] to downloaded[j])
+        }
+    }
+    return pairs
+}
+
+/**
+ * 格式化可用语言对为展示文案
+ *
+ * 例如："中文 ↔ English, 中文 ↔ 日本語, English ↔ 日本語"
+ * 无可用对时返回 "暂无可用翻译方向"
+ */
+fun formatAvailablePairs(pairs: List<Pair<Language, Language>>): String {
+    if (pairs.isEmpty()) return "暂无可用翻译方向"
+    return pairs.joinToString(", ") { (a, b) ->
+        "${a.displayName} ↔ ${b.displayName}"
+    }
+}
+
+/**
+ * 计算语言模型的总存储占用
+ */
+fun calculateModelTotalStorage(states: List<LanguageModelState>): Long {
+    return states.filter { it.isDownloaded }.sumOf { it.sizeBytes }
+}
+
+/**
+ * 计算删除某个语言模型后受影响的翻译方向
+ */
+fun computeAffectedPairs(
+    language: Language,
+    allModels: List<LanguageModelState>
+): List<Pair<Language, Language>> {
+    val otherDownloaded = allModels
+        .filter { it.isDownloaded && it.language != language }
+        .map { it.language }
+    return otherDownloaded.map { other -> language to other }
+}

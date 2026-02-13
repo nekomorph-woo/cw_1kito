@@ -44,6 +44,7 @@ fun LabSettingsScreen(
     onDarkModeChange: (DarkModeOption) -> Unit = {},
     onResetTheme: () -> Unit = {},
     onNavigateBack: () -> Unit,
+    onNavigateToMergingThreshold: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -116,6 +117,45 @@ fun LabSettingsScreen(
                 checked = textMergingEnabled,
                 onCheckedChange = onTextMergingEnabledChange
             )
+
+            // 合并阈值设置入口（仅在启用文本合并时显示）
+            if (textMergingEnabled) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    onClick = onNavigateToMergingThreshold,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "合并阈值设置",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = "调整合并算法的参数，选择预设方案",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                            )
+                        }
+                        Text(
+                            text = ">",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
 
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = 16.dp)

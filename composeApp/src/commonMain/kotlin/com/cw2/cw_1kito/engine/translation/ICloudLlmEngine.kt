@@ -54,7 +54,7 @@ interface ICloudLlmEngine {
         sourceLang: Language,
         targetLang: Language,
         customPrompt: String? = null,
-        concurrency: Int = 8
+        concurrency: Int = 5
     ): List<String>
 
     /**

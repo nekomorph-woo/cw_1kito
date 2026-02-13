@@ -65,7 +65,7 @@ interface IBatchTranslationManager {
          * 默认批次大小
          * 每批同时处理的请求数量
          */
-        const val DEFAULT_BATCH_SIZE = 8
+        const val DEFAULT_BATCH_SIZE = 5
 
         /**
          * 最大批次大小

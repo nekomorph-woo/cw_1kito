@@ -198,6 +198,12 @@ class MainActivity : ComponentActivity() {
             is SettingsEvent.DeleteLanguagePackFor -> {
                 deleteLanguagePackFor(event.source, event.target)
             }
+            is SettingsEvent.DownloadLanguageModel -> {
+                downloadLanguageModel(event.language)
+            }
+            is SettingsEvent.DeleteLanguageModel -> {
+                deleteLanguageModel(event.language)
+            }
             is SettingsEvent.NavigateToLanguagePackManagement -> {
                 // 先刷新语言包状态，再显示管理页面
                 navigateToLanguagePackManagement()
@@ -334,6 +340,87 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 下载单个语言模型
+     */
+    private fun downloadLanguageModel(language: com.cw2.cw_1kito.model.Language) {
+        lifecycleScope.launch {
+            try {
+                Log.d(TAG, "开始下载语言模型: ${language.code}")
+                viewModel.updateSingleLanguageModelStatus(
+                    language, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOADING
+                )
+
+                val result = languagePackManager.downloadLanguageModel(language, requireWifi = false)
+
+                when (result) {
+                    is DownloadResult.Success -> {
+                        Log.d(TAG, "语言模型下载成功: ${language.code}")
+                        // 乐观更新：立即将该模型状态设为 DOWNLOADED
+                        viewModel.updateSingleLanguageModelStatus(
+                            language, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOADED
+                        )
+                    }
+                    is DownloadResult.WifiRequired -> {
+                        viewModel.updateSingleLanguageModelStatus(
+                            language, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                            errorMessage = "当前非 Wi-Fi 环境，请连接 Wi-Fi 后重试"
+                        )
+                    }
+                    is DownloadResult.Failed -> {
+                        Log.e(TAG, "语言模型下载失败", result.error)
+                        viewModel.updateSingleLanguageModelStatus(
+                            language, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                            errorMessage = "下载失败: ${result.error.message}"
+                        )
+                    }
+                    is DownloadResult.UnsupportedLanguage -> {
+                        viewModel.updateSingleLanguageModelStatus(
+                            language, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                            errorMessage = "该语言不支持本地翻译"
+                        )
+                    }
+                    is DownloadResult.Cancelled -> {
+                        viewModel.updateSingleLanguageModelStatus(
+                            language, com.cw2.cw_1kito.model.LanguagePackStatus.NOT_DOWNLOADED
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "语言模型下载异常", e)
+                viewModel.updateSingleLanguageModelStatus(
+                    language, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                    errorMessage = "下载异常: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * 删除单个语言模型
+     */
+    private fun deleteLanguageModel(language: com.cw2.cw_1kito.model.Language) {
+        lifecycleScope.launch {
+            try {
+                Log.d(TAG, "开始删除语言模型: ${language.code}")
+                val success = languagePackManager.deleteLanguageModel(language)
+                if (success) {
+                    Log.d(TAG, "语言模型删除成功: ${language.code}")
+                    // 乐观更新：立即将该模型状态设为 NOT_DOWNLOADED
+                    // ML Kit 的 isModelDownloaded 有内部缓存，删除后立即查询可能仍返回 true
+                    viewModel.updateSingleLanguageModelStatus(
+                        language, com.cw2.cw_1kito.model.LanguagePackStatus.NOT_DOWNLOADED
+                    )
+                } else {
+                    viewModel.setError("删除失败")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "语言模型删除失败", e)
+                viewModel.setError("删除失败: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * 刷新语言包状态并更新 UI
      */
     private suspend fun refreshLanguagePackStates() {
@@ -375,16 +462,29 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 刷新语言模型状态并更新 UI
+     */
+    private suspend fun refreshLanguageModelStates() {
+        try {
+            val modelStates = languagePackManager.getLanguageModelStates()
+            viewModel.updateLanguageModelStates(modelStates)
+            Log.d(TAG, "语言模型状态已更新: ${modelStates.count { it.isDownloaded }} 个已下载")
+        } catch (e: Exception) {
+            Log.e(TAG, "刷新语言模型状态失败", e)
+        }
+    }
+
+    /**
      * 导航到语言包管理页面
      *
-     * 先刷新语言包真实状态，再显示管理页面，确保用户看到的是最新状态。
+     * 先刷新语言模型真实状态，再显示管理页面，确保用户看到的是最新状态。
      */
     private fun navigateToLanguagePackManagement() {
         lifecycleScope.launch {
             try {
-                refreshLanguagePackStates()
+                refreshLanguageModelStates()
             } catch (e: Exception) {
-                Log.e(TAG, "刷新语言包状态失败", e)
+                Log.e(TAG, "刷新语言模型状态失败", e)
             }
             // 无论刷新是否成功，都显示管理页面
             viewModel.onEvent(SettingsEvent.NavigateToLanguagePackManagement)

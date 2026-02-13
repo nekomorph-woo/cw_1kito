@@ -21,10 +21,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.LanguageModelState
 import com.cw2.cw_1kito.model.OcrLanguage
 import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.model.LlmModel
 import com.cw2.cw_1kito.model.TranslationMode
+import com.cw2.cw_1kito.model.getDefaultLanguageModelStates
 import com.cw2.cw_1kito.model.getDefaultLanguagePackStates
 import com.cw2.cw_1kito.ui.component.LanguageSection
 import com.cw2.cw_1kito.ui.component.ModelSection
@@ -117,8 +119,14 @@ data class SettingsUiState(
     val cloudLlmPrompt: String? = null,
     /** 是否显示语言包管理界面 */
     val showLanguagePackManagement: Boolean = false,
-    /** 语言包状态列表 */
-    val languagePackStates: List<com.cw2.cw_1kito.model.LanguagePackState>? = null
+    /** 语言包状态列表（旧，保留兼容） */
+    val languagePackStates: List<com.cw2.cw_1kito.model.LanguagePackState>? = null,
+    /** 语言模型状态列表（新） */
+    val languageModelStates: List<LanguageModelState>? = null,
+
+    // ========== 合并配置 ==========
+    /** 合并阈值配置 */
+    val mergingConfig: com.cw2.cw_1kito.model.MergingConfig = com.cw2.cw_1kito.model.MergingConfig.DEFAULT
 ) {
     val isApiKeyConfigured: Boolean
         get() = apiKey.isNotEmpty() && isApiKeyValid
@@ -178,6 +186,14 @@ sealed class SettingsEvent {
     data class DownloadLanguagePackFor(val source: Language, val target: Language) : SettingsEvent()
     /** 删除指定语言包 */
     data class DeleteLanguagePackFor(val source: Language, val target: Language) : SettingsEvent()
+    /** 下载单个语言模型 */
+    data class DownloadLanguageModel(val language: Language) : SettingsEvent()
+    /** 删除单个语言模型 */
+    data class DeleteLanguageModel(val language: Language) : SettingsEvent()
+
+    // ========== 合并配置事件 ==========
+    /** 合并配置变更 */
+    data class MergingConfigChanged(val config: com.cw2.cw_1kito.model.MergingConfig) : SettingsEvent()
 }
 
 /**
@@ -218,12 +234,12 @@ fun SettingsScreen(
         }
 
         LanguagePackManagementScreen(
-            languagePackStates = uiState.languagePackStates ?: getDefaultLanguagePackStates(),
-            onDownload = { source, target ->
-                onEvent(SettingsEvent.DownloadLanguagePackFor(source, target))
+            languageModelStates = uiState.languageModelStates ?: getDefaultLanguageModelStates(),
+            onDownloadModel = { language ->
+                onEvent(SettingsEvent.DownloadLanguageModel(language))
             },
-            onDelete = { source, target ->
-                onEvent(SettingsEvent.DeleteLanguagePackFor(source, target))
+            onDeleteModel = { language ->
+                onEvent(SettingsEvent.DeleteLanguageModel(language))
             },
             onNavigateBack = {
                 onEvent(SettingsEvent.DismissLanguagePackManagement)
