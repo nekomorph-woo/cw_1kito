@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Google ML Kit 配置文件
+        用于配置本地翻译引擎的网络行为
+    -->
+
+    <!-- ML Kit Translation API 基础 URL -->
+    <string name="mlkit_translation_model_base_url" translatable="false">
+        https://mlkit.googleapis.com
+    </string>
+
+    <!-- 翻译语言包版本 -->
+    <string name="mlkit_translation_version" translatable="false">
+        17.0.3
+    </string>
+
+    <!-- 预装的语言包列表 -->
+    <string-array name="mlkit_preinstalled_languages" translatable="false">
+        <item>zh</item> <!-- 中文 -->
+        <item>en</item> <!-- 英语 -->
+        <item>ja</item> <!-- 日语 -->
+        <item>ko</item> <!-- 韩语 -->
+    </string-array>
+</resources>

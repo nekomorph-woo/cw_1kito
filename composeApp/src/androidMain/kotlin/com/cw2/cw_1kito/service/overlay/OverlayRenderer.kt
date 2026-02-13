@@ -43,6 +43,67 @@ class OverlayRenderer(
 
     private val cornerRadius = 6f // dp
 
+    // 进度指示器 Paint
+    private val progressBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        style = Paint.Style.FILL
+        alpha = 180
+    }
+
+    private val progressTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+        textAlign = Paint.Align.CENTER
+    }
+
+    /**
+     * 绘制进度指示器（正在翻译: 3/10）
+     * @param canvas 画布
+     * @param currentCount 当前已完成数量
+     * @param totalCount 预计总数（可选，null 表示未知）
+     * @param density 屏幕密度
+     */
+    fun drawProgressIndicator(
+        canvas: Canvas,
+        currentCount: Int,
+        totalCount: Int?,
+        density: Float
+    ) {
+        if (currentCount <= 0) return
+
+        val textSize = 14f * density
+        progressTextPaint.textSize = textSize
+
+        // 构建进度文本
+        val progressText = if (totalCount != null && totalCount > 0) {
+            "正在翻译: $currentCount/$totalCount"
+        } else {
+            "正在翻译: $currentCount"
+        }
+
+        // 计算文本宽度和高度
+        val textWidth = progressTextPaint.measureText(progressText)
+        val textHeight = textSize * 1.2f // 估算行高
+
+        // 计算背景框大小
+        val padding = 8f * density
+        val bgWidth = textWidth + padding * 2
+        val bgHeight = textHeight + padding * 2
+
+        // 位置：屏幕顶部居中，距离顶部 20dp
+        val xPos = (screenWidth - bgWidth) / 2f
+        val yPos = 20f * density
+
+        // 绘制半透明黑色背景
+        val bgRect = RectF(xPos, yPos, xPos + bgWidth, yPos + bgHeight)
+        canvas.drawRoundRect(bgRect, 4f * density, 4f * density, progressBackgroundPaint)
+
+        // 绘制白色文本（垂直居中）
+        val textX = xPos + bgWidth / 2f
+        val textY = yPos + padding + textHeight - textSize * 0.2f // 垂直居中微调
+        canvas.drawText(progressText, textX, textY, progressTextPaint)
+    }
+
     /**
      * 绘制单个翻译结果
      */

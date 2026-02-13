@@ -3,6 +3,10 @@ package com.cw2.cw_1kito.data.config
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.LanguageConfig
 import com.cw2.cw_1kito.model.VlmModel
+import com.cw2.cw_1kito.model.OcrLanguage
+import com.cw2.cw_1kito.model.PerformanceMode
+import com.cw2.cw_1kito.model.TranslationMode
+import com.cw2.cw_1kito.model.MergingConfig
 import com.cw2.cw_1kito.ui.theme.ThemeConfig
 import com.cw2.cw_1kito.ui.theme.ThemeHue
 import com.cw2.cw_1kito.ui.theme.DarkModeOption
@@ -130,6 +134,15 @@ abstract class ConfigManagerImpl : ConfigManager {
         remove(DARK_MODE_KEY)
         remove(TEXT_MERGING_ENABLED_KEY)
         remove(TEXT_MERGING_PROMPT_KEY)
+        remove(PERFORMANCE_MODE_KEY)
+        remove(TRANSLATION_MODE_KEY)
+        remove(MERGING_CONFIG_KEY)
+        remove(ENABLE_LOCAL_OCR_KEY)
+        remove(USE_LOCAL_OCR_SCHEME_KEY)
+        remove(LOCAL_OCR_TRANSLATION_MODE_KEY)
+        remove(OCR_LANGUAGE_KEY)
+        remove(CLOUD_LLM_MODEL_KEY)
+        remove(CUSTOM_TRANSLATION_PROMPT_KEY)
     }
 
     override suspend fun getCustomPrompt(): String? {
@@ -187,6 +200,108 @@ abstract class ConfigManagerImpl : ConfigManager {
         }
     }
 
+    override suspend fun getPerformanceMode(): PerformanceMode {
+        val modeName = getString(PERFORMANCE_MODE_KEY)
+        return modeName?.let { PerformanceMode.valueOf(it) } ?: PerformanceMode.DEFAULT
+    }
+
+    override suspend fun savePerformanceMode(mode: PerformanceMode) {
+        saveString(PERFORMANCE_MODE_KEY, mode.name)
+        _configChanges.trySend(ConfigChange.PerformanceModeChanged(mode))
+    }
+
+    override suspend fun getTranslationMode(): TranslationMode {
+        val modeName = getString(TRANSLATION_MODE_KEY)
+        return modeName?.let { TranslationMode.valueOf(it) } ?: TranslationMode.DEFAULT
+    }
+
+    override suspend fun saveTranslationMode(mode: TranslationMode) {
+        saveString(TRANSLATION_MODE_KEY, mode.name)
+        _configChanges.trySend(ConfigChange.TranslationModeChanged(mode))
+    }
+
+    override suspend fun getMergingConfig(): MergingConfig {
+        val configJson = getString(MERGING_CONFIG_KEY)
+        return if (configJson != null) {
+            try {
+                json.decodeFromString<MergingConfig>(configJson)
+            } catch (e: Exception) {
+                MergingConfig.DEFAULT
+            }
+        } else {
+            MergingConfig.DEFAULT
+        }
+    }
+
+    override suspend fun saveMergingConfig(config: MergingConfig) {
+        val configJson = json.encodeToString(MergingConfig.serializer(), config)
+        saveString(MERGING_CONFIG_KEY, configJson)
+        _configChanges.trySend(ConfigChange.MergingConfigChanged(config))
+    }
+
+    override suspend fun getEnableLocalOcr(): Boolean {
+        return getString(ENABLE_LOCAL_OCR_KEY)?.toBoolean() ?: false
+    }
+
+    override suspend fun saveEnableLocalOcr(enabled: Boolean) {
+        saveString(ENABLE_LOCAL_OCR_KEY, enabled.toString())
+        _configChanges.trySend(ConfigChange.LocalOcrEnabledChanged(enabled))
+    }
+
+    override suspend fun getUseLocalOcrScheme(): Boolean {
+        return getString(USE_LOCAL_OCR_SCHEME_KEY)?.toBoolean() ?: true
+    }
+
+    override suspend fun saveUseLocalOcrScheme(use: Boolean) {
+        saveString(USE_LOCAL_OCR_SCHEME_KEY, use.toString())
+        _configChanges.trySend(ConfigChange.LocalOcrSchemeChanged(use))
+    }
+
+    override suspend fun getLocalOcrTranslationMode(): TranslationMode {
+        val modeName = getString(LOCAL_OCR_TRANSLATION_MODE_KEY)
+        return modeName?.let { TranslationMode.valueOf(it) } ?: TranslationMode.LOCAL
+    }
+
+    override suspend fun saveLocalOcrTranslationMode(mode: TranslationMode) {
+        saveString(LOCAL_OCR_TRANSLATION_MODE_KEY, mode.name)
+        _configChanges.trySend(ConfigChange.LocalOcrTranslationModeChanged(mode))
+    }
+
+    override suspend fun getCloudLlmModel(): String {
+        return getString(CLOUD_LLM_MODEL_KEY) ?: DEFAULT_CLOUD_LLM_MODEL
+    }
+
+    override suspend fun saveCloudLlmModel(modelId: String) {
+        saveString(CLOUD_LLM_MODEL_KEY, modelId)
+        _configChanges.trySend(ConfigChange.CloudLlmModelChanged(modelId))
+    }
+
+    override suspend fun getCustomTranslationPrompt(): String? {
+        return getString(CUSTOM_TRANSLATION_PROMPT_KEY)
+    }
+
+    override suspend fun saveCustomTranslationPrompt(prompt: String?) {
+        if (prompt == null) {
+            remove(CUSTOM_TRANSLATION_PROMPT_KEY)
+        } else {
+            saveString(CUSTOM_TRANSLATION_PROMPT_KEY, prompt)
+        }
+    }
+
+    override suspend fun getOcrLanguage(): OcrLanguage? {
+        val languageCode = getString(OCR_LANGUAGE_KEY)
+        return languageCode?.let { OcrLanguage.fromCode(it) }
+    }
+
+    override suspend fun saveOcrLanguage(language: OcrLanguage?) {
+        if (language == null) {
+            remove(OCR_LANGUAGE_KEY)
+        } else {
+            saveString(OCR_LANGUAGE_KEY, language.code)
+        }
+        _configChanges.trySend(ConfigChange.OcrLanguageChanged(language))
+    }
+
     companion object {
         private const val CUSTOM_PROMPT_KEY = "custom_prompt"
         private const val STREAMING_ENABLED_KEY = "lab_streaming_enabled"
@@ -194,6 +309,20 @@ abstract class ConfigManagerImpl : ConfigManager {
         private const val DARK_MODE_KEY = "dark_mode"
         private const val TEXT_MERGING_ENABLED_KEY = "text_merging_enabled"
         private const val TEXT_MERGING_PROMPT_KEY = "text_merging_prompt"
+        private const val PERFORMANCE_MODE_KEY = "performance_mode"
+        private const val TRANSLATION_MODE_KEY = "translation_mode"
+        private const val MERGING_CONFIG_KEY = "merging_config"
+
+        // 本地OCR相关配置键
+        private const val ENABLE_LOCAL_OCR_KEY = "enable_local_ocr"
+        private const val USE_LOCAL_OCR_SCHEME_KEY = "use_local_ocr_scheme"
+        private const val LOCAL_OCR_TRANSLATION_MODE_KEY = "local_ocr_translation_mode"
+        private const val OCR_LANGUAGE_KEY = "ocr_language"
+        private const val CLOUD_LLM_MODEL_KEY = "cloud_llm_model"
+        private const val CUSTOM_TRANSLATION_PROMPT_KEY = "custom_translation_prompt"
+
+        // 默认值
+        private const val DEFAULT_CLOUD_LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
     }
 }
 

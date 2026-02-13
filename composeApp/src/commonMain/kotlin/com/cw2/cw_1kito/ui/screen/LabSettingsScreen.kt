@@ -17,7 +17,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cw2.cw_1kito.ui.component.ApiKeySection
+import com.cw2.cw_1kito.ui.component.OcrLanguageSelector
 import com.cw2.cw_1kito.ui.theme.*
+import com.cw2.cw_1kito.model.OcrLanguage
 
 /**
  * 实验室设置页面
@@ -25,10 +28,17 @@ import com.cw2.cw_1kito.ui.theme.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LabSettingsScreen(
+    enableLocalOcr: Boolean,
+    onEnableLocalOcrChange: (Boolean) -> Unit,
     streamingEnabled: Boolean,
     onStreamingEnabledChange: (Boolean) -> Unit,
     textMergingEnabled: Boolean,
     onTextMergingEnabledChange: (Boolean) -> Unit,
+    ocrLanguage: OcrLanguage?,
+    onOcrLanguageChange: (OcrLanguage?) -> Unit,
+    apiKey: String = "",
+    isApiKeyValid: Boolean = false,
+    onApiKeyChange: (String) -> Unit = {},
     themeConfig: ThemeConfig = ThemeConfig.DEFAULT,
     onThemeHueChange: (ThemeHue) -> Unit = {},
     onDarkModeChange: (DarkModeOption) -> Unit = {},
@@ -83,6 +93,14 @@ fun LabSettingsScreen(
                 )
             }
 
+            // 本地 OCR 翻译开关
+            LabSwitchItem(
+                title = "本地OCR翻译",
+                description = "启用本地OCR引擎进行文字识别，支持离线翻译",
+                checked = enableLocalOcr,
+                onCheckedChange = onEnableLocalOcrChange
+            )
+
             // 流式翻译开关
             LabSwitchItem(
                 title = "流式翻译",
@@ -98,6 +116,35 @@ fun LabSettingsScreen(
                 checked = textMergingEnabled,
                 onCheckedChange = onTextMergingEnabledChange
             )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
+            // OCR 语言选择
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
+            ) {
+                OcrLanguageSelector(
+                    selectedLanguage = ocrLanguage,
+                    onLanguageSelected = onOcrLanguageChange
+                )
+            }
+
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
+            // API Key 配置区域
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp)
+            ) {
+                ApiKeySection(
+                    apiKey = apiKey,
+                    isValid = isApiKeyValid,
+                    onApiKeyChange = onApiKeyChange
+                )
+            }
 
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = 16.dp)

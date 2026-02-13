@@ -5,8 +5,12 @@ import androidx.lifecycle.viewModelScope
 import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.data.config.ConfigManager
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.OcrLanguage
 import com.cw2.cw_1kito.model.VlmModel
+import com.cw2.cw_1kito.model.LlmModel
+import com.cw2.cw_1kito.model.TranslationMode
 import com.cw2.cw_1kito.permission.PermissionManager
+import com.cw2.cw_1kito.ui.screen.LanguagePackPrompt
 import com.cw2.cw_1kito.ui.screen.SettingsEvent
 import com.cw2.cw_1kito.ui.screen.SettingsUiState
 import com.cw2.cw_1kito.ui.theme.ThemeConfig
@@ -83,6 +87,31 @@ class MainViewModel(
                     textMergingEnabled = textMergingEnabled,
                     textMergingPrompt = savedMergingPrompt ?: TranslationApiClientImpl.DEFAULT_MERGING_PROMPT
                 ) }
+
+                // 加载 OCR 语言配置
+                val ocrLanguage = configManager.getOcrLanguage()
+                _uiState.update { it.copy(ocrLanguage = ocrLanguage) }
+
+                // 加载本地 OCR 开关
+                val enableLocalOcr = configManager.getEnableLocalOcr()
+                _uiState.update { it.copy(enableLocalOcr = enableLocalOcr) }
+
+                // 加载使用本地 OCR 方案
+                val useLocalOcrScheme = configManager.getUseLocalOcrScheme()
+                _uiState.update { it.copy(useLocalOcrScheme = useLocalOcrScheme) }
+
+                // 加载本地 OCR 翻译模式
+                val localOcrTranslationMode = configManager.getLocalOcrTranslationMode()
+                _uiState.update { it.copy(localOcrTranslationMode = localOcrTranslationMode) }
+
+                // 加载云端 LLM 模型
+                val cloudLlmModelId = configManager.getCloudLlmModel()
+                val cloudLlmModel = LlmModel.fromModelId(cloudLlmModelId) ?: LlmModel.DEFAULT
+                _uiState.update { it.copy(cloudLlmModel = cloudLlmModel) }
+
+                // 加载云端 LLM 提示词
+                val cloudLlmPrompt = configManager.getCustomTranslationPrompt()
+                _uiState.update { it.copy(cloudLlmPrompt = cloudLlmPrompt) }
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "加载配置失败", e)
             }
@@ -290,6 +319,108 @@ class MainViewModel(
                     }
                 }
             }
+            is SettingsEvent.OcrLanguageChanged -> {
+                _uiState.update { it.copy(ocrLanguage = event.language) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveOcrLanguage(event.language)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存 OCR 语言失败", e)
+                    }
+                }
+            }
+            is SettingsEvent.EnableLocalOcrChanged -> {
+                _uiState.update { it.copy(enableLocalOcr = event.enabled) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveEnableLocalOcr(event.enabled)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存本地OCR开关状态失败", e)
+                    }
+                }
+            }
+            is SettingsEvent.UseLocalOcrSchemeChanged -> {
+                _uiState.update { it.copy(useLocalOcrScheme = event.useLocalOcr) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveUseLocalOcrScheme(event.useLocalOcr)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存翻译方案选择失败", e)
+                    }
+                }
+            }
+            // 语言包相关事件
+            SettingsEvent.ShowLanguagePackGuide -> {
+                _uiState.update { it.copy(showLanguagePackGuide = true) }
+            }
+            SettingsEvent.DismissLanguagePackGuide -> {
+                _uiState.update { it.copy(
+                    showLanguagePackGuide = false,
+                    languagePackPrompt = null,
+                    hasCheckedLanguagePacks = true
+                ) }
+            }
+            is SettingsEvent.DownloadLanguagePack -> {
+                // 下载请求由 MainActivity 处理（需要 Android 特定实现）
+                _uiState.update { it.copy(isLoading = true) }
+            }
+            SettingsEvent.LanguagePackCheckComplete -> {
+                _uiState.update { it.copy(hasCheckedLanguagePacks = true) }
+            }
+            // ========== 本地 OCR 新增事件处理 ==========
+            is SettingsEvent.LocalOcrTranslationModeChanged -> {
+                _uiState.update { it.copy(localOcrTranslationMode = event.mode) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveLocalOcrTranslationMode(event.mode)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存本地OCR翻译模式失败", e)
+                    }
+                }
+            }
+            is SettingsEvent.CloudLlmModelChanged -> {
+                _uiState.update { it.copy(cloudLlmModel = event.model) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveCloudLlmModel(event.model.modelId)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存云端LLM模型失败", e)
+                    }
+                }
+            }
+            is SettingsEvent.CloudLlmPromptChanged -> {
+                _uiState.update { it.copy(cloudLlmPrompt = event.prompt) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveCustomTranslationPrompt(event.prompt)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存云端LLM提示词失败", e)
+                    }
+                }
+            }
+            SettingsEvent.ResetCloudLlmPrompt -> {
+                _uiState.update { it.copy(cloudLlmPrompt = null) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveCustomTranslationPrompt(null)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "重置云端LLM提示词失败", e)
+                    }
+                }
+            }
+            SettingsEvent.NavigateToLanguagePackManagement -> {
+                _uiState.update { it.copy(showLanguagePackManagement = true) }
+            }
+            SettingsEvent.DismissLanguagePackManagement -> {
+                _uiState.update { it.copy(showLanguagePackManagement = false) }
+            }
+            is SettingsEvent.DownloadLanguagePackFor -> {
+                // 下载指定语言包，由 MainActivity 处理实际下载
+                _uiState.update { it.copy(isLoading = true) }
+            }
+            is SettingsEvent.DeleteLanguagePackFor -> {
+                // 删除指定语言包，由 MainActivity 处理实际删除
+            }
         }
     }
 
@@ -368,6 +499,101 @@ class MainViewModel(
                 useMergingPrompt = _uiState.value.textMergingEnabled
             )
             android.util.Log.d("MainViewModel", "翻译配置: $config")
+        }
+    }
+
+    /**
+     * 设置语言包下载提示信息
+     *
+     * 此方法由 Android 特定的启动检查器调用，用于显示下载引导对话框。
+     *
+     * @param prompt 语言包下载提示信息
+     */
+    fun setLanguagePackPrompt(prompt: LanguagePackPrompt?) {
+        _uiState.update { it.copy(
+            languagePackPrompt = prompt,
+            showLanguagePackGuide = prompt != null
+        ) }
+    }
+
+    /**
+     * 设置语言包检查加载状态
+     *
+     * @param isLoading 是否正在加载
+     */
+    fun setLanguagePackLoading(isLoading: Boolean) {
+        _uiState.update { it.copy(isLoading = isLoading) }
+    }
+
+    /**
+     * 设置语言包下载错误消息
+     *
+     * @param error 错误消息
+     */
+    fun setLanguagePackError(error: String?) {
+        _uiState.update { it.copy(
+            isLoading = false,
+            errorMessage = error
+        ) }
+    }
+
+    /**
+     * 设置加载状态
+     *
+     * @param isLoading 是否正在加载
+     */
+    fun setLoading(isLoading: Boolean) {
+        _uiState.update { it.copy(isLoading = isLoading) }
+    }
+
+    /**
+     * 设置错误消息
+     *
+     * @param error 错误消息
+     */
+    fun setError(error: String?) {
+        _uiState.update { it.copy(
+            isLoading = false,
+            errorMessage = error
+        ) }
+    }
+
+    /**
+     * 更新语言包状态列表
+     *
+     * @param states 新的语言包状态列表
+     */
+    fun updateLanguagePackStates(states: List<com.cw2.cw_1kito.model.LanguagePackState>) {
+        _uiState.update { it.copy(languagePackStates = states) }
+    }
+
+    /**
+     * 更新单个语言对的状态
+     *
+     * 用于在下载/删除操作时即时更新 UI，提供用户反馈。
+     *
+     * @param source 源语言
+     * @param target 目标语言
+     * @param status 新状态
+     * @param errorMessage 错误信息（可选）
+     */
+    fun updateSingleLanguagePackStatus(
+        source: com.cw2.cw_1kito.model.Language,
+        target: com.cw2.cw_1kito.model.Language,
+        status: com.cw2.cw_1kito.model.LanguagePackStatus,
+        errorMessage: String? = null
+    ) {
+        _uiState.update { state ->
+            val currentStates = state.languagePackStates
+                ?: com.cw2.cw_1kito.model.getDefaultLanguagePackStates()
+            val updatedStates = currentStates.map { pack ->
+                if (pack.sourceLang == source && pack.targetLang == target) {
+                    pack.copy(status = status, errorMessage = errorMessage)
+                } else {
+                    pack
+                }
+            }
+            state.copy(languagePackStates = updatedStates)
         }
     }
 }

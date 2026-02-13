@@ -12,13 +12,19 @@ import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.cw2.cw_1kito.data.config.AndroidConfigManagerImpl
+import com.cw2.cw_1kito.engine.translation.local.DownloadResult
+import com.cw2.cw_1kito.engine.translation.local.LanguagePackStartupChecker
+import com.cw2.cw_1kito.engine.translation.local.MLKitLanguagePackManager
 import com.cw2.cw_1kito.permission.PermissionManagerImpl
 import com.cw2.cw_1kito.service.capture.ScreenCaptureManager
 import com.cw2.cw_1kito.service.floating.FloatingService
 import com.cw2.cw_1kito.ui.screen.MainScreen
 import com.cw2.cw_1kito.ui.screen.SettingsEvent
 import com.cw2.cw_1kito.ui.theme.KitoTheme
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * 主 Activity
@@ -62,6 +68,20 @@ class MainActivity : ComponentActivity() {
         MainViewModelFactory(permissionManager, configManager)
     }
 
+    // 语言包管理器
+    private val languagePackManager by lazy {
+        MLKitLanguagePackManager(applicationContext)
+    }
+
+    // 语言包启动检查器（懒加载，仅在需要时初始化）
+    private val languagePackStartupChecker by lazy {
+        LanguagePackStartupChecker(
+            context = applicationContext,
+            configManager = AndroidConfigManagerImpl(applicationContext),
+            languagePackManager = languagePackManager
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -85,6 +105,9 @@ class MainActivity : ComponentActivity() {
 
         // 检查是否从 FloatingService 跳转过来请求重新授权
         handleReAuthIntent(intent)
+
+        // 启动语言包检查（仅首次启动）
+        checkLanguagePacksOnStartup()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -111,6 +134,45 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 启动时检查语言包
+     *
+     * 仅在首次安装或更新版本时执行检查，避免每次启动都弹出提示。
+     */
+    private fun checkLanguagePacksOnStartup() {
+        lifecycleScope.launch {
+            try {
+                // 检查是否应该执行启动检查
+                if (!languagePackStartupChecker.shouldPerformStartupCheck(applicationContext)) {
+                    Log.d(TAG, "语言包启动检查已完成，跳过")
+                    viewModel.onEvent(SettingsEvent.LanguagePackCheckComplete)
+                    return@launch
+                }
+
+                Log.d(TAG, "执行语言包启动检查...")
+
+                // 执行检查
+                val prompt = languagePackStartupChecker.checkLanguagePacksOnStartup()
+
+                if (prompt != null) {
+                    // 需要下载语言包，设置提示信息
+                    viewModel.setLanguagePackPrompt(prompt)
+                } else {
+                    // 语言包已就绪或不需要
+                    viewModel.onEvent(SettingsEvent.LanguagePackCheckComplete)
+                }
+
+                // 标记检查已完成
+                languagePackStartupChecker.markCheckCompleted(applicationContext)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "语言包启动检查失败", e)
+                // 出错时也标记完成，避免每次启动都检查
+                viewModel.onEvent(SettingsEvent.LanguagePackCheckComplete)
+            }
+        }
+    }
+
+    /**
      * 处理 UI 事件
      */
     private fun handleEvent(event: SettingsEvent) {
@@ -127,9 +189,205 @@ class MainActivity : ComponentActivity() {
             is SettingsEvent.StartService -> {
                 startFloatingService()
             }
+            is SettingsEvent.DownloadLanguagePack -> {
+                downloadLanguagePack(event.requireWifi)
+            }
+            is SettingsEvent.DownloadLanguagePackFor -> {
+                downloadLanguagePackFor(event.source, event.target)
+            }
+            is SettingsEvent.DeleteLanguagePackFor -> {
+                deleteLanguagePackFor(event.source, event.target)
+            }
+            is SettingsEvent.NavigateToLanguagePackManagement -> {
+                // 先刷新语言包状态，再显示管理页面
+                navigateToLanguagePackManagement()
+            }
             else -> {
                 viewModel.onEvent(event)
             }
+        }
+    }
+
+    /**
+     * 下载语言包
+     *
+     * @param requireWifi 是否要求 Wi-Fi 环境
+     */
+    private fun downloadLanguagePack(requireWifi: Boolean) {
+        lifecycleScope.launch {
+            try {
+                viewModel.setLanguagePackLoading(true)
+
+                val result = languagePackStartupChecker.downloadCurrentLanguagePair(requireWifi)
+
+                when (result) {
+                    is DownloadResult.Success -> {
+                        val sizeMB = result.sizeBytes / (1024 * 1024)
+                        Log.d(TAG, "语言包下载成功，大小: ${sizeMB}MB")
+                        viewModel.setLanguagePackError(null)
+                        viewModel.onEvent(SettingsEvent.DismissLanguagePackGuide)
+                    }
+                    is DownloadResult.WifiRequired -> {
+                        Log.w(TAG, "需要 Wi-Fi 连接")
+                        viewModel.setLanguagePackError("当前非 Wi-Fi 环境，请连接 Wi-Fi 后重试")
+                    }
+                    is DownloadResult.Failed -> {
+                        Log.e(TAG, "语言包下载失败", result.error)
+                        viewModel.setLanguagePackError("下载失败: ${result.error.message}")
+                    }
+                    is DownloadResult.UnsupportedLanguage -> {
+                        Log.w(TAG, "不支持的语言对")
+                        viewModel.setLanguagePackError("当前语言对不支持本地翻译")
+                    }
+                    is DownloadResult.Cancelled -> {
+                        Log.d(TAG, "语言包下载已取消")
+                        viewModel.setLanguagePackLoading(false)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "语言包下载异常", e)
+                viewModel.setLanguagePackError("下载异常: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 下载指定语言对的语言包
+     *
+     * @param source 源语言
+     * @param target 目标语言
+     */
+    private fun downloadLanguagePackFor(source: com.cw2.cw_1kito.model.Language, target: com.cw2.cw_1kito.model.Language) {
+        lifecycleScope.launch {
+            try {
+                Log.d(TAG, "开始下载语言包: ${source.code} -> ${target.code}")
+
+                // 立即将该语言对的 UI 状态更新为"下载中"，让用户看到反馈
+                viewModel.updateSingleLanguagePackStatus(
+                    source, target, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOADING
+                )
+
+                val result = languagePackManager.downloadLanguagePair(source, target, requireWifi = false)
+
+                when (result) {
+                    is DownloadResult.Success -> {
+                        val sizeMB = result.sizeBytes / (1024 * 1024)
+                        Log.d(TAG, "语言包下载成功，大小: ${sizeMB}MB")
+                        // 刷新语言包状态列表
+                        refreshLanguagePackStates()
+                    }
+                    is DownloadResult.WifiRequired -> {
+                        Log.w(TAG, "需要 Wi-Fi 连接")
+                        viewModel.updateSingleLanguagePackStatus(
+                            source, target, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                            errorMessage = "当前非 Wi-Fi 环境，请连接 Wi-Fi 后重试"
+                        )
+                    }
+                    is DownloadResult.Failed -> {
+                        Log.e(TAG, "语言包下载失败", result.error)
+                        viewModel.updateSingleLanguagePackStatus(
+                            source, target, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                            errorMessage = "下载失败: ${result.error.message}"
+                        )
+                    }
+                    is DownloadResult.UnsupportedLanguage -> {
+                        Log.w(TAG, "不支持的语言对")
+                        viewModel.updateSingleLanguagePackStatus(
+                            source, target, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                            errorMessage = "该语言对不支持本地翻译"
+                        )
+                    }
+                    is DownloadResult.Cancelled -> {
+                        Log.d(TAG, "语言包下载已取消")
+                        refreshLanguagePackStates()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "语言包下载异常", e)
+                viewModel.updateSingleLanguagePackStatus(
+                    source, target, com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED,
+                    errorMessage = "下载异常: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * 删除指定语言对的语言包
+     *
+     * @param source 源语言
+     * @param target 目标语言
+     */
+    private fun deleteLanguagePackFor(source: com.cw2.cw_1kito.model.Language, target: com.cw2.cw_1kito.model.Language) {
+        lifecycleScope.launch {
+            try {
+                Log.d(TAG, "开始删除语言包: ${source.code} -> ${target.code}")
+                languagePackManager.deleteLanguagePair(source, target)
+                Log.d(TAG, "语言包删除成功")
+                // 刷新语言包状态列表
+                refreshLanguagePackStates()
+            } catch (e: Exception) {
+                Log.e(TAG, "语言包删除失败", e)
+                viewModel.setError("删除失败: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 刷新语言包状态并更新 UI
+     */
+    private suspend fun refreshLanguagePackStates() {
+        try {
+            // 刷新管理器内部状态（重新查询 ML Kit）
+            languagePackManager.refreshStates()
+
+            // 获取所有语言对的状态并转换为 UI 模型
+            // 使用 first() 只获取当前值，避免 collect 无限挂起
+            val states = languagePackManager.getLanguagePackStates().first()
+
+            // 转换为 UI 使用的 LanguagePackState
+            val uiStates = states.map { state ->
+                com.cw2.cw_1kito.model.LanguagePackState(
+                    sourceLang = state.sourceLang,
+                    targetLang = state.targetLang,
+                    status = when (state.status) {
+                        com.cw2.cw_1kito.engine.translation.local.DownloadStatus.DOWNLOADED ->
+                            com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOADED
+                        com.cw2.cw_1kito.engine.translation.local.DownloadStatus.DOWNLOADING ->
+                            com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOADING
+                        com.cw2.cw_1kito.engine.translation.local.DownloadStatus.NOT_DOWNLOADED ->
+                            com.cw2.cw_1kito.model.LanguagePackStatus.NOT_DOWNLOADED
+                        com.cw2.cw_1kito.engine.translation.local.DownloadStatus.FAILED ->
+                            com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOAD_FAILED
+                        com.cw2.cw_1kito.engine.translation.local.DownloadStatus.PAUSED ->
+                            com.cw2.cw_1kito.model.LanguagePackStatus.NOT_DOWNLOADED
+                    },
+                    sizeBytes = state.sizeBytes,
+                    downloadProgress = state.progress
+                )
+            }
+            viewModel.updateLanguagePackStates(uiStates)
+            Log.d(TAG, "语言包状态已更新: ${uiStates.count { it.status == com.cw2.cw_1kito.model.LanguagePackStatus.DOWNLOADED }} 个已下载")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "刷新语言包状态失败", e)
+        }
+    }
+
+    /**
+     * 导航到语言包管理页面
+     *
+     * 先刷新语言包真实状态，再显示管理页面，确保用户看到的是最新状态。
+     */
+    private fun navigateToLanguagePackManagement() {
+        lifecycleScope.launch {
+            try {
+                refreshLanguagePackStates()
+            } catch (e: Exception) {
+                Log.e(TAG, "刷新语言包状态失败", e)
+            }
+            // 无论刷新是否成功，都显示管理页面
+            viewModel.onEvent(SettingsEvent.NavigateToLanguagePackManagement)
         }
     }
 
@@ -182,14 +440,21 @@ class MainActivity : ComponentActivity() {
      * 启动悬浮窗服务
      */
     private fun startFloatingService() {
-        val intent = Intent(this, FloatingService::class.java).apply {
-            action = FloatingService.ACTION_START
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            @Suppress("DEPRECATION")
-            startService(intent)
+        try {
+            val intent = Intent(this, FloatingService::class.java).apply {
+                action = FloatingService.ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                @Suppress("DEPRECATION")
+                startService(intent)
+            }
+            // 重置加载状态
+            viewModel.setLoading(false)
+        } catch (e: Exception) {
+            Log.e(TAG, "启动悬浮窗服务失败", e)
+            viewModel.setError("启动服务失败: ${e.message}")
         }
     }
 

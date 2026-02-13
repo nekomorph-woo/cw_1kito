@@ -23,7 +23,19 @@ data class TranslationConfig(
     val maxTokens: Int = 2000,
 
     /** 是否使用文本合并 Prompt（用于合并相邻文本块） */
-    val useMergingPrompt: Boolean = false
+    val useMergingPrompt: Boolean = false,
+
+    /** 性能模式（控制 OCR 图像处理质量） */
+    val performanceMode: PerformanceMode = PerformanceMode.BALANCED,
+
+    /** 翻译模式（本地/云端/混合） */
+    val translationMode: TranslationMode = TranslationMode.HYBRID,
+
+    /** 文本合并配置 */
+    val mergingConfig: MergingConfig = MergingConfig.DEFAULT,
+
+    /** OCR 语言（null 表示自动推断） */
+    val ocrLanguage: OcrLanguage? = null
 ) {
     init {
         require(temperature in 0.0..2.0) {
@@ -46,7 +58,10 @@ data class TranslationConfig(
             model = VlmModel.DEFAULT,
             sourceLanguage = Language.AUTO,
             targetLanguage = Language.ZH,
-            useMergingPrompt = false
+            useMergingPrompt = false,
+            performanceMode = PerformanceMode.BALANCED,
+            translationMode = TranslationMode.HYBRID,
+            mergingConfig = MergingConfig.DEFAULT
         )
 
         /**
@@ -58,7 +73,10 @@ data class TranslationConfig(
             targetLanguage = targetLanguage,
             temperature = 0.5,
             maxTokens = 1000,
-            useMergingPrompt = false
+            useMergingPrompt = false,
+            performanceMode = PerformanceMode.FAST,
+            translationMode = TranslationMode.LOCAL,
+            mergingConfig = MergingConfig.DEFAULT
         )
 
         /**
@@ -70,7 +88,25 @@ data class TranslationConfig(
             targetLanguage = targetLanguage,
             temperature = 0.7,
             maxTokens = 2000,
-            useMergingPrompt = false
+            useMergingPrompt = false,
+            performanceMode = PerformanceMode.QUALITY,
+            translationMode = TranslationMode.REMOTE,
+            mergingConfig = MergingConfig.DEFAULT
+        )
+
+        /**
+         * 创建本地优先配置
+         */
+        fun localFirst(targetLanguage: Language = Language.ZH) = TranslationConfig(
+            model = VlmModel.DEFAULT,
+            sourceLanguage = Language.AUTO,
+            targetLanguage = targetLanguage,
+            temperature = 0.5,
+            maxTokens = 1000,
+            useMergingPrompt = false,
+            performanceMode = PerformanceMode.BALANCED,
+            translationMode = TranslationMode.HYBRID,
+            mergingConfig = MergingConfig.DEFAULT
         )
     }
 }

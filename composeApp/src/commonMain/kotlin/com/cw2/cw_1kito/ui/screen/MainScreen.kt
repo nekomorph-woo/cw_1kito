@@ -1,7 +1,9 @@
 package com.cw2.cw_1kito.ui.screen
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import com.cw2.cw_1kito.ui.component.LanguagePackGuideDialog
 
 /**
  * 主界面组件
@@ -20,12 +22,40 @@ fun MainScreen(
 ) {
     var showLabSettings by remember { mutableStateOf(false) }
 
+    // 拦截返回键：在实验室页面时返回设置主页
+    BackHandler(enabled = showLabSettings) {
+        showLabSettings = false
+    }
+
+    // 语言包下载引导对话框
+    val languagePackPrompt = uiState.languagePackPrompt
+    if (uiState.showLanguagePackGuide && languagePackPrompt != null) {
+        LanguagePackGuideDialog(
+            languagePair = languagePackPrompt.languagePair,
+            estimatedSize = languagePackPrompt.estimatedSize,
+            isWifiConnected = languagePackPrompt.isWifiConnected,
+            onDownload = { requireWifi ->
+                onEvent(SettingsEvent.DownloadLanguagePack(requireWifi))
+            },
+            onDismiss = {
+                onEvent(SettingsEvent.DismissLanguagePackGuide)
+            }
+        )
+    }
+
     if (showLabSettings) {
         LabSettingsScreen(
+            enableLocalOcr = uiState.enableLocalOcr,
+            onEnableLocalOcrChange = { onEvent(SettingsEvent.EnableLocalOcrChanged(it)) },
             streamingEnabled = uiState.streamingEnabled,
             onStreamingEnabledChange = { onEvent(SettingsEvent.StreamingEnabledChanged(it)) },
             textMergingEnabled = uiState.textMergingEnabled,
             onTextMergingEnabledChange = { onEvent(SettingsEvent.TextMergingEnabledChanged(it)) },
+            ocrLanguage = uiState.ocrLanguage,
+            onOcrLanguageChange = { onEvent(SettingsEvent.OcrLanguageChanged(it)) },
+            apiKey = uiState.apiKey,
+            isApiKeyValid = uiState.isApiKeyValid,
+            onApiKeyChange = { onEvent(SettingsEvent.ApiKeyChanged(it)) },
             themeConfig = uiState.themeConfig,
             onThemeHueChange = { hue -> onEvent(SettingsEvent.ThemeHueChanged(hue)) },
             onDarkModeChange = { mode -> onEvent(SettingsEvent.DarkModeChanged(mode)) },

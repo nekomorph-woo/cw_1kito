@@ -25,12 +25,34 @@ import com.cw2.cw_1kito.data.api.TranslationApiClient
 import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.data.api.TranslationApiRequest
 import com.cw2.cw_1kito.data.config.AndroidConfigManagerImpl
+import com.cw2.cw_1kito.engine.DependencyStatus
+import com.cw2.cw_1kito.engine.TranslationDependencyChecker
+import com.cw2.cw_1kito.engine.merge.TextMergerEngine
+import com.cw2.cw_1kito.engine.ocr.IOcrEngine
+import com.cw2.cw_1kito.engine.ocr.MLKitOCRManager
+import com.cw2.cw_1kito.engine.ocr.OcrEngineFactory
+import com.cw2.cw_1kito.engine.translation.TranslationManager
+import com.cw2.cw_1kito.engine.translation.BatchTranslationManagerFactory
+import com.cw2.cw_1kito.engine.translation.local.MLKitTranslator
+import com.cw2.cw_1kito.engine.translation.remote.SiliconFlowClient
+import com.cw2.cw_1kito.engine.translation.remote.SiliconFlowLLMClient
 import com.cw2.cw_1kito.model.BoundingBox
 import com.cw2.cw_1kito.model.CoordinateMode
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.MergedText
+import com.cw2.cw_1kito.model.MergingConfig
+import com.cw2.cw_1kito.model.OcrDetection
+import com.cw2.cw_1kito.model.PerformanceMode
+import com.cw2.cw_1kito.model.TranslationMode
 import com.cw2.cw_1kito.model.TranslationResult
 import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.service.capture.ScreenCaptureManager
+import com.cw2.cw_1kito.util.Logger
+import com.cw2.cw_1kito.util.PerformanceMetrics
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpTimeout
@@ -46,6 +68,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -118,11 +141,54 @@ class FloatingService : Service() {
     // 协程作用域
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // API 客户端
+    // API 客户端（云端 VLM 翻译）
     private val apiClient = TranslationApiClientImpl()
 
     // 配置管理器（延迟初始化，因为 Service 初始化时 Context 还未准备好）
     private lateinit var configManager: AndroidConfigManagerImpl
+
+    // ==================== 本地 OCR 翻译组件 ====================
+
+    /**
+     * 本地 OCR 引擎（Google ML Kit Text Recognition v2）
+     */
+    private var ocrEngine: IOcrEngine? = null
+
+    /**
+     * 文本合并引擎（TextMerger）
+     */
+    private var textMerger: TextMergerEngine? = null
+
+    /**
+     * 翻译管理器（统一本地/云端翻译）
+     */
+    private var translationManager: TranslationManager? = null
+
+    /**
+     * 本地翻译引擎（ML Kit）
+     */
+    private var localTranslator: MLKitTranslator? = null
+
+    /**
+     * 云端翻译引擎（SiliconFlow）
+     */
+    private var remoteTranslator: SiliconFlowClient? = null
+
+    /**
+     * 云端 LLM 翻译引擎（SiliconFlowLLM）
+     * 用于批量翻译管理器
+     */
+    private var cloudLlmTranslator: SiliconFlowLLMClient? = null
+
+    /**
+     * 翻译依赖检查器
+     */
+    private var dependencyChecker: TranslationDependencyChecker? = null
+
+    /**
+     * 批量翻译管理器（延迟创建）
+     */
+    private var batchTranslationManager: com.cw2.cw_1kito.engine.translation.IBatchTranslationManager? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): FloatingService = this@FloatingService
@@ -143,6 +209,51 @@ class FloatingService : Service() {
             }
         }
         createNotificationChannel()
+
+        // 初始化本地 OCR 翻译组件
+        initializeLocalOcrComponents()
+    }
+
+    /**
+     * 初始化本地 OCR 翻译组件
+     */
+    private fun initializeLocalOcrComponents() {
+        try {
+            Logger.d("[FloatingService] 正在初始化本地 OCR 翻译组件...")
+
+            // 1. 创建 OCR 引擎（延迟加载，首次使用时初始化）
+            ocrEngine = OcrEngineFactory.create(applicationContext)
+
+            // 2. 创建文本合并引擎
+            textMerger = TextMergerEngine()
+
+            // 3. 创建本地翻译引擎
+            localTranslator = MLKitTranslator(applicationContext)
+
+            // 4. 创建云端翻译引擎
+            remoteTranslator = SiliconFlowClient(configManager)
+
+            // 4.5. 创建云端 LLM 翻译引擎（用于批量翻译）
+            cloudLlmTranslator = SiliconFlowLLMClient(configManager)
+
+            // 5. 创建翻译管理器
+            translationManager = TranslationManager(
+                configManager = configManager,
+                localEngine = localTranslator,
+                remoteEngine = remoteTranslator
+            )
+
+            // 6. 创建依赖检查器
+            dependencyChecker = TranslationDependencyChecker(
+                configManager = configManager,
+                localTranslationEngine = localTranslator!!
+            )
+
+            Logger.d("[FloatingService] 本地 OCR 翻译组件创建成功")
+        } catch (e: Exception) {
+            Logger.e(e, "[FloatingService] 本地 OCR 翻译组件初始化失败")
+            Toast.makeText(this, "本地翻译组件初始化失败", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onDestroy() {
@@ -152,6 +263,51 @@ class FloatingService : Service() {
         serviceScope.cancel()
         removeFloatingView()
         hideOverlay()
+
+        // 释放本地 OCR 翻译组件
+        releaseLocalOcrComponents()
+    }
+
+    /**
+     * 释放本地 OCR 翻译组件
+     */
+    private fun releaseLocalOcrComponents() {
+        try {
+            Logger.d("[FloatingService] 正在释放本地 OCR 翻译组件...")
+
+            // 1. 释放翻译管理器
+            translationManager?.release()
+            translationManager = null
+
+            // 2. 释放本地翻译引擎
+            localTranslator?.release()
+            localTranslator = null
+
+            // 3. 释放云端翻译引擎
+            remoteTranslator?.release()
+            remoteTranslator = null
+
+            // 3.5. 释放云端 LLM 翻译引擎
+            cloudLlmTranslator?.release()
+            cloudLlmTranslator = null
+
+            // 4. 释放 OCR 引擎
+            ocrEngine?.release()
+            ocrEngine = null
+
+            // 5. 清空文本合并引擎
+            textMerger = null
+
+            // 6. 清空依赖检查器
+            dependencyChecker = null
+
+            // 7. 清空批量翻译管理器
+            batchTranslationManager = null
+
+            Logger.d("[FloatingService] 本地 OCR 翻译组件已释放")
+        } catch (e: Exception) {
+            Logger.e(e, "[FloatingService] 释放本地 OCR 翻译组件失败")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -346,14 +502,126 @@ class FloatingService : Service() {
     }
 
     /**
-     * 执行翻译流程（入口，根据配置选择流式或非流式）
+     * 执行翻译流程（入口，根据配置选择翻译方案）
+     *
+     * ## 方案选择逻辑
+     * 1. **VLM 云端方案** (useLocalOcrScheme = false)
+     *    - 使用云端 VLM 一体化完成 OCR 和翻译
+     *    - 根据流式翻译开关选择流式/非流式
+     *
+     * 2. **本地 OCR 方案** (useLocalOcrScheme = true)
+     *    - 本地 OCR 识别文本
+     *    - 根据 localOcrTranslationMode 选择翻译方式：
+     *      - LOCAL: 使用 ML Kit 本地翻译
+     *      - REMOTE: 使用 SiliconFlow 云端翻译
+     *      - HYBRID: 优先本地，失败时降级到云端
      */
     private suspend fun performTranslation() {
-        val streamingEnabled = configManager.getStreamingEnabled()
-        if (streamingEnabled) {
-            performStreamingTranslation()
+        // 1. 依赖检查
+        val depStatus = dependencyChecker?.checkDependencies()
+        if (depStatus !is DependencyStatus.Satisfied) {
+            handleMissingDependency(depStatus)
+            return
+        }
+
+        // 2. 读取翻译方案配置
+        val useLocalOcrScheme = configManager.getUseLocalOcrScheme()
+
+        Logger.d("[FloatingService] 当前翻译方案: ${if (useLocalOcrScheme) "本地 OCR 方案" else "VLM 云端方案"}")
+
+        if (useLocalOcrScheme) {
+            // 本地 OCR 方案
+            performLocalOcrSchemeTranslation()
         } else {
-            performNonStreamingTranslation()
+            // VLM 云端方案
+            val streamingEnabled = configManager.getStreamingEnabled()
+            if (streamingEnabled) {
+                performStreamingTranslation()
+            } else {
+                performNonStreamingTranslation()
+            }
+        }
+    }
+
+    /**
+     * 处理缺失依赖
+     *
+     * 根据依赖检查结果显示相应的提示信息或引导界面
+     *
+     * @param status 依赖检查结果
+     */
+    private fun handleMissingDependency(status: DependencyStatus?) {
+        when (status) {
+            is DependencyStatus.MissingApiKey -> {
+                // 显示 API Key 配置引导
+                Logger.d("[FloatingService] 缺少 API Key: ${status.message}")
+                Toast.makeText(this, status.message, Toast.LENGTH_LONG).show()
+                // 可选：跳转到设置页面
+                launchMainActivityForSettings()
+            }
+            is DependencyStatus.MissingLanguagePack -> {
+                // 显示语言包下载引导
+                Logger.d("[FloatingService] 缺少语言包: ${status.message}")
+                Toast.makeText(
+                    this,
+                    "${status.message}\n${status.action}",
+                    Toast.LENGTH_LONG
+                ).show()
+                // 可选：跳转到语言包管理页面
+                launchMainActivityForSettings()
+            }
+            is DependencyStatus.MissingPermission -> {
+                // 提示权限缺失
+                Logger.d("[FloatingService] 缺少权限: ${status.message}")
+                Toast.makeText(this, status.message, Toast.LENGTH_LONG).show()
+            }
+            is DependencyStatus.UnsupportedLanguage -> {
+                // 提示语言不支持
+                Logger.d("[FloatingService] 不支持的语言: ${status.message}")
+                Toast.makeText(
+                    this,
+                    "${status.message}\n${status.action}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            is DependencyStatus.MultipleMissing -> {
+                // 多个依赖缺失
+                Logger.d("[FloatingService] 多个依赖缺失: ${status.message}")
+                Toast.makeText(
+                    this,
+                    status.message,
+                    Toast.LENGTH_LONG
+                ).show()
+                launchMainActivityForSettings()
+            }
+            null -> {
+                // dependencyChecker 未初始化，直接显示错误
+                Logger.w("[FloatingService] 依赖检查器未初始化")
+                Toast.makeText(
+                    this,
+                    "服务未完全初始化，请重试",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            is DependencyStatus.Satisfied -> {
+                // 不会进入此分支
+            }
+        }
+        updateLoadingState(STATE_ERROR)
+    }
+
+    /**
+     * 跳转到 MainActivity 设置页面
+     */
+    private fun launchMainActivityForSettings() {
+        try {
+            val intent = Intent(this, com.cw2.cw_1kito.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("open_settings", true)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch MainActivity for settings", e)
         }
     }
 
@@ -470,6 +738,663 @@ class FloatingService : Service() {
                 // 悬浮球显示红叉（与非流式异常交互一致）
                 updateLoadingState(STATE_ERROR)
             }
+        }
+    }
+
+    /**
+     * 执行本地 OCR 翻译流程
+     *
+     * ## 完整流程
+     * 1. 截取屏幕
+     * 2. 根据性能模式调整图片分辨率
+     * 3. MLKit OCR 识别（TODO）
+     * 4. TextMergerEngine 文本合并（Y轴聚类 + X轴合并 + 横竖检测）
+     * 5. TranslationManager 翻译（并发处理）
+     * 6. TranslationOverlayView 显示结果
+     *
+     * ## 错误处理和降级
+     * - OCR 失败 → 降级到云端 VLM（如果有 API Key）
+     * - 翻译失败 → 根据翻译模式降级（HYBRID 模式自动切换到云端）
+     * - 截图失败 → 提示用户重新授权
+     */
+    private suspend fun performLocalTranslation() {
+        updateLoadingState(STATE_LOADING)
+
+        // 性能记录变量
+        var screenshotTimeMs = 0L
+        var ocrTimeMs = 0L
+        var mergeTimeMs = 0L
+        var translateTimeMs = 0L
+        var ocrResults: List<OcrDetection>? = null
+        var mergedTexts: List<MergedText>? = null
+        var translations: List<String>? = null
+
+        try {
+            // 1. 截图
+            Logger.ocrStart()
+            val screenshotStartTime = System.currentTimeMillis()
+
+            val (imageBytes, bitmap) = captureScreenWithBitmap()
+            screenshotTimeMs = System.currentTimeMillis() - screenshotStartTime
+
+            Logger.d("[FloatingService] 截图完成: ${bitmap.width}x${bitmap.height}, ${imageBytes.size} bytes")
+
+            // 2. 获取性能模式并调整图片分辨率
+            val performanceMode = configManager.getPerformanceMode()
+            val targetSize = when (performanceMode) {
+                PerformanceMode.FAST -> 672
+                PerformanceMode.BALANCED -> 896
+                PerformanceMode.QUALITY -> 1080
+            }
+            val resizedBitmap = resizeBitmap(bitmap, targetSize)
+
+            Logger.d("[FloatingService] 性能模式: ${performanceMode.displayName}, 目标短边: ${targetSize}px")
+            Logger.d("[FloatingService] 调整后图片: ${resizedBitmap.width}x${resizedBitmap.height}")
+
+            // 3. 初始化翻译管理器（首次使用）
+            if (translationManager != null && !translationManager!!.isInitialized()) {
+                Logger.d("[FloatingService] 初始化翻译管理器...")
+                val initSuccess = translationManager!!.initialize()
+                if (!initSuccess) {
+                    throw Exception("翻译管理器初始化失败")
+                }
+            }
+
+            // 4. OCR 识别
+            val ocrStartTime = System.currentTimeMillis()
+            ocrResults = performOcrRecognition(resizedBitmap)
+            ocrTimeMs = System.currentTimeMillis() - ocrStartTime
+
+            Logger.ocrSuccess(ocrResults!!.size, ocrTimeMs)
+
+            if (ocrResults!!.isEmpty()) {
+                Toast.makeText(this, "未识别到任何文本", Toast.LENGTH_SHORT).show()
+                updateLoadingState(STATE_ERROR)
+                return
+            }
+
+            // 5. 文本合并
+            val mergeStartTime = System.currentTimeMillis()
+            val mergingConfig = configManager.getMergingConfig()
+            mergedTexts = textMerger?.merge(ocrResults!!, mergingConfig) ?: emptyList()
+            mergeTimeMs = System.currentTimeMillis() - mergeStartTime
+
+            Logger.mergeStart(ocrResults!!.size)
+            Logger.mergeSuccess(ocrResults!!.size, mergedTexts!!.size, mergeTimeMs)
+
+            // 6. 翻译（并发处理）
+            val translateStartTime = System.currentTimeMillis()
+            translations = translateMergedTexts(mergedTexts!!)
+            translateTimeMs = System.currentTimeMillis() - translateStartTime
+
+            Logger.translationSuccess(
+                mergedTexts!!.sumOf { it.text.length },
+                translateTimeMs
+            )
+
+            // 7. 创建 TranslationResult 并显示
+            val (screenWidth, screenHeight) = getScreenDimensions()
+            val results = createTranslationResults(
+                mergedTexts!!,
+                translations!!,
+                resizedBitmap.width,
+                resizedBitmap.height,
+                screenWidth,
+                screenHeight
+            )
+
+            showOverlay(results, screenWidth, screenHeight)
+
+            updateLoadingState(STATE_SUCCESS)
+
+            // 8. 记录性能指标
+            val totalTimeMs = screenshotTimeMs + ocrTimeMs + mergeTimeMs + translateTimeMs
+            Logger.d("[FloatingService] === 性能统计 ===")
+            Logger.d("[FloatingService] 截图: ${screenshotTimeMs}ms")
+            Logger.d("[FloatingService] OCR: ${ocrTimeMs}ms (${ocrResults!!.size} 个文本框)")
+            Logger.d("[FloatingService] 合并: ${mergeTimeMs}ms (${ocrResults!!.size} → ${mergedTexts!!.size})")
+            Logger.d("[FloatingService] 翻译: ${translateTimeMs}ms (${translations!!.size} 条)")
+            Logger.d("[FloatingService] 总计: ${totalTimeMs}ms")
+
+            // 清理 bitmap
+            if (resizedBitmap != bitmap) {
+                resizedBitmap.recycle()
+            }
+            bitmap.recycle()
+
+        } catch (e: Exception) {
+            Logger.e(e, "[FloatingService] 本地 OCR 翻译失败")
+            when (e) {
+                is ApiException.AuthError -> {
+                    Toast.makeText(this, "录屏权限已过期，请重新授权", Toast.LENGTH_LONG).show()
+                }
+                else -> {
+                    // 尝试降级到云端 VLM
+                    val hasApiKey = !configManager.getApiKey().isNullOrEmpty()
+                    if (hasApiKey) {
+                        Logger.d("[FloatingService] 本地 OCR 失败，降级到云端 VLM")
+                        Toast.makeText(this, "本地 OCR 失败，切换到云端翻译", Toast.LENGTH_SHORT).show()
+                        performNonStreamingTranslation()
+                    } else {
+                        Toast.makeText(this, "翻译失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            updateLoadingState(STATE_ERROR)
+        }
+    }
+
+    /**
+     * 执行本地 OCR 方案翻译流程
+     *
+     * ## 完整流程
+     * 1. 截取屏幕
+     * 2. 根据性能模式调整图片分辨率
+     * 3. 本地 OCR 识别（ML Kit）
+     * 4. 文本合并（TextMergerEngine）
+     * 5. 翻译（根据 localOcrTranslationMode 选择）
+     *    - LOCAL: 使用 ML Kit 本地翻译
+     *    - REMOTE: 使用 SiliconFlow 云端翻译
+     *    - HYBRID: 优先本地，失败时降级到云端
+     * 6. 显示翻译覆盖层
+     *
+     * ## 错误处理
+     * - OCR 失败 → 提示用户，可选降级到云端 VLM
+     * - 翻译失败 → 根据翻译模式自动处理降级
+     * - 截图失败 → 提示用户重新授权
+     */
+    private suspend fun performLocalOcrSchemeTranslation() {
+        updateLoadingState(STATE_LOADING)
+
+        // 性能记录变量
+        var screenshotTimeMs = 0L
+        var ocrTimeMs = 0L
+        var mergeTimeMs = 0L
+        var translateTimeMs = 0L
+        var ocrResults: List<OcrDetection>? = null
+        var mergedTexts: List<MergedText>? = null
+        var translations: List<String>? = null
+
+        try {
+            // 1. 截图
+            Logger.ocrStart()
+            val screenshotStartTime = System.currentTimeMillis()
+
+            val (imageBytes, bitmap) = captureScreenWithBitmap()
+            screenshotTimeMs = System.currentTimeMillis() - screenshotStartTime
+
+            Logger.d("[FloatingService] 截图完成: ${bitmap.width}x${bitmap.height}, ${imageBytes.size} bytes")
+
+            // 2. 获取性能模式并调整图片分辨率
+            val performanceMode = configManager.getPerformanceMode()
+            val targetSize = when (performanceMode) {
+                PerformanceMode.FAST -> 672
+                PerformanceMode.BALANCED -> 896
+                PerformanceMode.QUALITY -> 1080
+            }
+            val resizedBitmap = resizeBitmap(bitmap, targetSize)
+
+            Logger.d("[FloatingService] 性能模式: ${performanceMode.displayName}, 目标短边: ${targetSize}px")
+            Logger.d("[FloatingService] 调整后图片: ${resizedBitmap.width}x${resizedBitmap.height}")
+
+            // 3. 获取本地 OCR 翻译模式
+            val translationMode = configManager.getLocalOcrTranslationMode()
+            Logger.d("[FloatingService] 本地 OCR 翻译模式: ${translationMode.displayName}")
+
+            // 4. 根据翻译模式初始化相应的翻译引擎
+            when (translationMode) {
+                TranslationMode.LOCAL -> {
+                    // 仅本地翻译
+                    if (localTranslator != null && !localTranslator!!.isInitialized()) {
+                        Logger.d("[FloatingService] 初始化本地翻译引擎...")
+                        val initSuccess = localTranslator!!.initialize()
+                        if (!initSuccess) {
+                            throw Exception("本地翻译引擎初始化失败")
+                        }
+                    }
+                }
+                TranslationMode.REMOTE -> {
+                    // 云端翻译无需初始化
+                    Logger.d("[FloatingService] 云端翻译引擎无需初始化")
+                }
+                TranslationMode.HYBRID -> {
+                    // 混合模式：初始化本地翻译引擎
+                    if (localTranslator != null && !localTranslator!!.isInitialized()) {
+                        Logger.d("[FloatingService] 初始化本地翻译引擎（HYBRID 模式）...")
+                        val initSuccess = localTranslator!!.initialize()
+                        if (!initSuccess) {
+                            throw Exception("本地翻译引擎初始化失败")
+                        }
+                    }
+                }
+            }
+
+            // 5. OCR 识别
+            val ocrStartTime = System.currentTimeMillis()
+            ocrResults = performOcrRecognition(resizedBitmap)
+            ocrTimeMs = System.currentTimeMillis() - ocrStartTime
+
+            Logger.ocrSuccess(ocrResults!!.size, ocrTimeMs)
+
+            if (ocrResults!!.isEmpty()) {
+                Toast.makeText(this, "未识别到任何文本", Toast.LENGTH_SHORT).show()
+                updateLoadingState(STATE_ERROR)
+                return
+            }
+
+            // 6. 文本合并
+            val mergeStartTime = System.currentTimeMillis()
+            val mergingConfig = configManager.getMergingConfig()
+            mergedTexts = textMerger?.merge(ocrResults!!, mergingConfig) ?: emptyList()
+            mergeTimeMs = System.currentTimeMillis() - mergeStartTime
+
+            Logger.mergeStart(ocrResults!!.size)
+            Logger.mergeSuccess(ocrResults!!.size, mergedTexts!!.size, mergeTimeMs)
+
+            // 7. 翻译（使用 TranslationManager 根据模式自动选择）
+            val translateStartTime = System.currentTimeMillis()
+            val (screenWidth, screenHeight) = getScreenDimensions()
+
+            // 检查是否启用流式翻译
+            val streamingEnabled = configManager.getStreamingEnabled()
+            Logger.d("[FloatingService] 流式翻译: ${if (streamingEnabled) "已启用" else "已禁用"}")
+
+            if (streamingEnabled) {
+                // 流式模式：先创建空覆盖层，逐批添加结果
+                showEmptyOverlay(screenWidth, screenHeight)
+                overlayView?.setExpectedTotalCount(mergedTexts!!.size)
+
+                translations = translateWithLocalOcrSchemeStreaming(
+                    mergedTexts!!,
+                    translationMode,
+                    resizedBitmap.width,
+                    resizedBitmap.height,
+                    screenWidth,
+                    screenHeight
+                ) { batchResults ->
+                    // 每批完成后，在主线程更新覆盖层
+                    withContext(Dispatchers.Main) {
+                        overlayView?.addResults(batchResults)
+                    }
+                }
+            } else {
+                // 非流式模式：等待所有翻译完成后统一显示
+                translations = translateWithLocalOcrScheme(mergedTexts!!, translationMode)
+
+                // 创建 TranslationResult 并显示
+                val results = createTranslationResults(
+                    mergedTexts!!,
+                    translations!!,
+                    resizedBitmap.width,
+                    resizedBitmap.height,
+                    screenWidth,
+                    screenHeight
+                )
+                showOverlay(results, screenWidth, screenHeight)
+            }
+
+            translateTimeMs = System.currentTimeMillis() - translateStartTime
+
+            Logger.translationSuccess(
+                mergedTexts!!.sumOf { it.text.length },
+                translateTimeMs
+            )
+
+            updateLoadingState(STATE_SUCCESS)
+
+            // 9. 记录性能指标
+            val totalTimeMs = screenshotTimeMs + ocrTimeMs + mergeTimeMs + translateTimeMs
+            Logger.d("[FloatingService] === 性能统计 ===")
+            Logger.d("[FloatingService] 截图: ${screenshotTimeMs}ms")
+            Logger.d("[FloatingService] OCR: ${ocrTimeMs}ms (${ocrResults!!.size} 个文本框)")
+            Logger.d("[FloatingService] 合并: ${mergeTimeMs}ms (${ocrResults!!.size} → ${mergedTexts!!.size})")
+            Logger.d("[FloatingService] 翻译: ${translateTimeMs}ms (${translations!!.size} 条, 模式: ${translationMode.displayName})")
+            Logger.d("[FloatingService] 总计: ${totalTimeMs}ms")
+
+            // 清理 bitmap
+            if (resizedBitmap != bitmap) {
+                resizedBitmap.recycle()
+            }
+            bitmap.recycle()
+
+        } catch (e: Exception) {
+            Logger.e(e, "[FloatingService] 本地 OCR 方案翻译失败")
+            when (e) {
+                is ApiException.AuthError -> {
+                    Toast.makeText(this, "录屏权限已过期，请重新授权", Toast.LENGTH_LONG).show()
+                }
+                else -> {
+                    // 尝试降级到云端 VLM
+                    val hasApiKey = !configManager.getApiKey().isNullOrEmpty()
+                    if (hasApiKey) {
+                        Logger.d("[FloatingService] 本地 OCR 方案失败，降级到云端 VLM")
+                        Toast.makeText(this, "本地 OCR 失败，切换到云端翻译", Toast.LENGTH_SHORT).show()
+                        performNonStreamingTranslation()
+                    } else {
+                        Toast.makeText(this, "翻译失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            updateLoadingState(STATE_ERROR)
+        }
+    }
+
+    /**
+     * 使用本地 OCR 方案翻译合并后的文本
+     */
+    private suspend fun translateWithLocalOcrScheme(
+        mergedTexts: List<MergedText>,
+        translationMode: TranslationMode
+    ): List<String> {
+        return withContext(Dispatchers.IO) {
+            val langConfig = configManager.getLanguageConfig()
+            val sourceLang = langConfig.sourceLanguage
+            val targetLang = langConfig.targetLanguage
+
+            Logger.d("[FloatingService] 开始翻译 ${mergedTexts.size} 条文本...")
+            Logger.d("[FloatingService] 源语言: ${sourceLang.displayName}, 目标语言: ${targetLang.displayName}")
+            Logger.d("[FloatingService] 翻译模式: ${translationMode.displayName}")
+
+            // 确保翻译引擎已初始化
+            if (localTranslator == null || cloudLlmTranslator == null) {
+                Logger.e("[FloatingService] 翻译引擎未初始化")
+                return@withContext List(mergedTexts.size) { "" }
+            }
+
+            // 创建或复用批量翻译管理器
+            if (batchTranslationManager == null) {
+                batchTranslationManager = BatchTranslationManagerFactory.create(
+                    localTranslationEngine = localTranslator!!,
+                    cloudLlmEngine = cloudLlmTranslator!!,
+                    configManager = configManager,
+                    batchSize = com.cw2.cw_1kito.engine.translation.IBatchTranslationManager.DEFAULT_BATCH_SIZE
+                )
+            }
+
+            // 提取待翻译文本列表
+            val texts = mergedTexts.map { it.text }
+
+            // 使用批量翻译管理器进行翻译
+            val translations = batchTranslationManager!!.translateBatch(
+                texts = texts,
+                sourceLang = sourceLang,
+                targetLang = targetLang,
+                mode = translationMode,
+                onBatchComplete = { batchIndex, totalBatches ->
+                    // 批次完成回调：记录进度
+                    Logger.d("[FloatingService] 批量翻译进度: $batchIndex/$totalBatches")
+                }
+            )
+
+            Logger.d("[FloatingService] 批量翻译完成: ${translations.size} 条结果")
+            translations
+        }
+    }
+
+    /**
+     * 使用本地 OCR 方案翻译合并后的文本（流式模式）
+     *
+     * 每批翻译完成后，调用回调函数传递 TranslationResult 列表。
+     *
+     * @param mergedTexts 合并后的文本列表
+     * @param translationMode 翻译模式
+     * @param bitmapWidth 位图宽度
+     * @param bitmapHeight 位图高度
+     * @param screenWidth 屏幕宽度
+     * @param screenHeight 屏幕高度
+     * @param onBatchResults 每批翻译完成后的回调，传递 TranslationResult 列表
+     * @return 所有翻译结果列表
+     */
+    private suspend fun translateWithLocalOcrSchemeStreaming(
+        mergedTexts: List<MergedText>,
+        translationMode: TranslationMode,
+        bitmapWidth: Int,
+        bitmapHeight: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+        onBatchResults: suspend (List<com.cw2.cw_1kito.model.TranslationResult>) -> Unit
+    ): List<String> = coroutineScope {
+        val langConfig = configManager.getLanguageConfig()
+        val sourceLang = langConfig.sourceLanguage
+        val targetLang = langConfig.targetLanguage
+
+        Logger.d("[FloatingService] 开始流式翻译 ${mergedTexts.size} 条文本...")
+        Logger.d("[FloatingService] 源语言: ${sourceLang.displayName}, 目标语言: ${targetLang.displayName}")
+        Logger.d("[FloatingService] 翻译模式: ${translationMode.displayName}")
+
+        // 确保翻译引擎已初始化
+        if (localTranslator == null || cloudLlmTranslator == null) {
+            Logger.e("[FloatingService] 翻译引擎未初始化")
+            onBatchResults(emptyList())
+            return@coroutineScope List(mergedTexts.size) { "" }
+        }
+
+        // 创建或复用批量翻译管理器
+        if (batchTranslationManager == null) {
+            batchTranslationManager = BatchTranslationManagerFactory.create(
+                localTranslationEngine = localTranslator!!,
+                cloudLlmEngine = cloudLlmTranslator!!,
+                configManager = configManager,
+                batchSize = com.cw2.cw_1kito.engine.translation.IBatchTranslationManager.DEFAULT_BATCH_SIZE
+            )
+        }
+
+        // 分批处理文本
+        val batchSize = com.cw2.cw_1kito.engine.translation.IBatchTranslationManager.DEFAULT_BATCH_SIZE
+        val batches = mergedTexts.chunked(batchSize)
+        val allTranslations = mutableListOf<String>()
+
+        Logger.d("[FloatingService] 流式翻译: ${mergedTexts.size} 个文本, ${batches.size} 批")
+
+        batches.forEachIndexed { batchIndex, batch ->
+            // 提取当前批次的文本
+            val batchTexts = batch.map { it.text }
+
+            // 翻译当前批次
+            val batchTranslations = batchTranslationManager!!.translateBatch(
+                texts = batchTexts,
+                sourceLang = sourceLang,
+                targetLang = targetLang,
+                mode = translationMode,
+                onBatchComplete = null  // 使用我们自己的进度跟踪
+            )
+
+            // 为当前批次创建 TranslationResult
+            val batchResults = batch.mapIndexed { indexInBatch, mergedText ->
+                val translation = batchTranslations.getOrElse(indexInBatch) { mergedText.text }
+
+                // 将图片坐标转换为屏幕坐标
+                val screenBox = mergedText.boundingBox.toScreenRect(
+                    screenWidth, screenHeight, bitmapWidth, bitmapHeight
+                )
+
+                // 转换为归一化坐标（0-1）
+                com.cw2.cw_1kito.model.TranslationResult(
+                    originalText = mergedText.text,
+                    translatedText = translation,
+                    boundingBox = com.cw2.cw_1kito.model.BoundingBox(
+                        left = screenBox.left.toFloat() / screenWidth,
+                        top = screenBox.top.toFloat() / screenHeight,
+                        right = screenBox.right.toFloat() / screenWidth,
+                        bottom = screenBox.bottom.toFloat() / screenHeight
+                    )
+                )
+            }
+
+            // 调用回调，传递当前批次的结果
+            onBatchResults(batchResults)
+
+            // 累积翻译结果
+            allTranslations.addAll(batchTranslations)
+
+            Logger.d("[FloatingService] 流式翻译批次 ${batchIndex + 1}/${batches.size} 完成, 累计 ${allTranslations.size}/${mergedTexts.size}")
+        }
+
+        Logger.d("[FloatingService] 流式翻译完成: ${allTranslations.size} 条结果")
+        allTranslations
+    }
+
+    /**
+     * 截取屏幕并返回字节数组和 Bitmap
+     */
+    private suspend fun captureScreenWithBitmap(): Pair<ByteArray, Bitmap> {
+        return withContext(Dispatchers.IO) {
+            if (!ScreenCaptureManager.hasPermission()) {
+                Logger.w("[FloatingService] Screen capture permission not granted")
+                launchMainActivityForReAuth()
+                throw ApiException.AuthError("录屏权限已过期，请重新授权")
+            }
+
+            val result = ScreenCaptureManager.captureScreen()
+
+            when (result) {
+                is com.cw2.cw_1kito.service.capture.CaptureResult.Success -> {
+                    val bitmap = android.graphics.BitmapFactory.decodeByteArray(
+                        result.imageBytes,
+                        0,
+                        result.imageBytes.size
+                    )
+                    Pair(result.imageBytes, bitmap)
+                }
+                is com.cw2.cw_1kito.service.capture.CaptureResult.PermissionDenied -> {
+                    launchMainActivityForReAuth()
+                    throw ApiException.AuthError("录屏权限已过期，请重新授权")
+                }
+                is com.cw2.cw_1kito.service.capture.CaptureResult.Error -> {
+                    throw ApiException.NetworkError(Exception(result.message))
+                }
+            }
+        }
+    }
+
+    /**
+     * 调整 Bitmap 尺寸（保持宽高比，短边缩放到目标尺寸）
+     */
+    private fun resizeBitmap(bitmap: Bitmap, targetShortSide: Int): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+
+        val shortSide = minOf(width, height)
+
+        // 如果短边已经小于等于目标尺寸，不需要缩放
+        if (shortSide <= targetShortSide) {
+            return bitmap
+        }
+
+        val scale = targetShortSide.toFloat() / shortSide.toFloat()
+        val newWidth = (width * scale).toInt()
+        val newHeight = (height * scale).toInt()
+
+        Logger.d("[FloatingService] 缩放图片: ${width}x${height} → ${newWidth}x${newHeight} (scale=$scale)")
+
+        return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+    }
+
+    /**
+     * 执行 OCR 识别
+     */
+    private suspend fun performOcrRecognition(bitmap: Bitmap): List<OcrDetection> {
+        return withContext(Dispatchers.IO) {
+            val engine = ocrEngine
+            if (engine == null) {
+                throw Exception("OCR 引擎未初始化")
+            }
+
+            // 根据当前翻译配置更新 OCR 语言
+            if (engine is MLKitOCRManager) {
+                val languageConfig = configManager.getLanguageConfig()
+                val ocrLanguage = configManager.getOcrLanguage()
+                val inferredLanguage = OcrEngineFactory.inferOcrLanguage(
+                    sourceLanguage = languageConfig.sourceLanguage,
+                    targetLanguage = languageConfig.targetLanguage,
+                    manualOcrLanguage = ocrLanguage
+                )
+
+                // 如果语言不同，更新语言设置
+                if (engine.getLanguage() != inferredLanguage) {
+                    Logger.d("[FloatingService] 切换 OCR 语言: ${engine.getLanguage().displayName} -> ${inferredLanguage.displayName}")
+                    engine.setLanguage(inferredLanguage)
+                }
+            }
+
+            // 首次使用时初始化
+            if (!engine.isInitialized()) {
+                Logger.d("[FloatingService] 初始化 OCR 引擎...")
+                val initSuccess = engine.initialize()
+                if (!initSuccess) {
+                    throw Exception("OCR 引擎初始化失败")
+                }
+                Logger.d("[FloatingService] OCR 引擎初始化成功")
+            }
+
+            // 执行识别
+            val results = engine.recognize(bitmap)
+            results
+        }
+    }
+
+    /**
+     * 翻译合并后的文本（并发处理）
+     */
+    private suspend fun translateMergedTexts(mergedTexts: List<MergedText>): List<String> {
+        return withContext(Dispatchers.IO) {
+            val langConfig = configManager.getLanguageConfig()
+            val sourceLang = langConfig.sourceLanguage
+            val targetLang = langConfig.targetLanguage
+
+            Logger.d("[FloatingService] 开始翻译 ${mergedTexts.size} 条文本...")
+            Logger.d("[FloatingService] 源语言: ${sourceLang.displayName}, 目标语言: ${targetLang.displayName}")
+
+            // 并发翻译所有文本
+            val translations = mergedTexts.map { merged ->
+                async {
+                    try {
+                        translationManager?.translate(
+                            merged.text,
+                            sourceLang,
+                            targetLang
+                        ) ?: ""
+                    } catch (e: Exception) {
+                        Logger.e(e, "[FloatingService] 翻译失败: ${merged.text.take(30)}...")
+                        "" // 翻译失败时返回空字符串
+                    }
+                }
+            }.awaitAll()
+
+            translations
+        }
+    }
+
+    /**
+     * 创建 TranslationResult 列表
+     */
+    private fun createTranslationResults(
+        mergedTexts: List<MergedText>,
+        translations: List<String>,
+        imageWidth: Int,
+        imageHeight: Int,
+        screenWidth: Int,
+        screenHeight: Int
+    ): List<TranslationResult> {
+        return mergedTexts.mapIndexed { index, merged ->
+            val translated = translations.getOrElse(index) { "" }
+
+            // 将图片坐标转换为屏幕坐标
+            val screenBox = merged.boundingBox.toScreenRect(
+                screenWidth, screenHeight, imageWidth, imageHeight
+            )
+
+            // 转换为归一化坐标（0-1）
+            TranslationResult(
+                originalText = merged.text,
+                translatedText = translated,
+                boundingBox = com.cw2.cw_1kito.model.BoundingBox(
+                    left = screenBox.left.toFloat() / screenWidth,
+                    top = screenBox.top.toFloat() / screenHeight,
+                    right = screenBox.right.toFloat() / screenWidth,
+                    bottom = screenBox.bottom.toFloat() / screenHeight
+                )
+            )
         }
     }
 

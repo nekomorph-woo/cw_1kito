@@ -42,6 +42,9 @@ class TranslationOverlayView(
         lastTapTime = 0L
     }
 
+    // 进度状态（用于流式翻译）
+    private var expectedTotalCount: Int? = null // 预期的总结果数（null 表示未知）
+
     init {
         // 设置视图为全屏
         layoutParams = ViewGroup.LayoutParams(
@@ -56,13 +59,30 @@ class TranslationOverlayView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 触摸事件传递优化：只拦截翻译框区域的触摸事件
+        // 其他区域的触摸事件传递给下层 UI，保持原 UI 可点击
+
+        val x = event.x.toInt()
+        val y = event.y.toInt()
+
+        // 检查触摸点是否在任何翻译框区域内
+        val touchInResultArea = renderer.getDrawAreas(results).any { rect ->
+            rect.contains(x, y)
+        }
+
+        // 如果触摸点不在任何翻译框内，传递事件给下层 UI
+        if (!touchInResultArea) {
+            return false // 不消费事件，允许穿透
+        }
+
+        // 触摸点在翻译框内，处理双击关闭逻辑
         if (event.action == MotionEvent.ACTION_UP) {
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastTapTime < doubleTapTimeout) {
                 // 双击检测成功
                 doubleTapHandler.removeCallbacks(doubleTapRunnable)
                 lastTapTime = 0L
-                Log.d(tag, "Overlay dismissed by double tap")
+                Log.d(tag, "Overlay dismissed by double tap on translation box")
                 performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                 onDismiss()
                 return true
@@ -73,14 +93,28 @@ class TranslationOverlayView(
                 doubleTapHandler.postDelayed(doubleTapRunnable, doubleTapTimeout)
             }
         }
-        return super.onTouchEvent(event)
+
+        return true // 消费事件，阻止穿透
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
         val density = resources.displayMetrics.density
+
+        // 1. 绘制所有翻译结果
         renderer.drawAllResults(canvas, results, density)
+
+        // 2. 绘制进度指示器（仅在流式模式下显示）
+        if (expectedTotalCount != null || results.size > 0) {
+            // 如果设置了预期总数，使用预期总数；否则只显示当前数量
+            renderer.drawProgressIndicator(
+                canvas,
+                currentCount = results.size,
+                totalCount = expectedTotalCount,
+                density = density
+            )
+        }
     }
 
     /**
@@ -90,6 +124,16 @@ class TranslationOverlayView(
         results.add(result)
         invalidate()
         Log.d(tag, "Added result, total: ${results.size}")
+    }
+
+    /**
+     * 设置预期的总结果数量（用于显示进度指示器）
+     * @param total 预期的总数，null 表示未知
+     */
+    fun setExpectedTotalCount(total: Int?) {
+        expectedTotalCount = total
+        invalidate()
+        Log.d(tag, "Set expected total count: $total")
     }
 
     /**
@@ -116,9 +160,18 @@ class TranslationOverlayView(
     fun getResultCount(): Int = results.size
 
     /**
-     * 获取绘图区域（用于调试）
+     * 获取绘图区域（用于调试和触摸检测）
      */
     fun getDrawAreas(): List<android.graphics.Rect> {
         return renderer.getDrawAreas(results)
+    }
+
+    /**
+     * 清空所有翻译结果并触发重绘（必须在主线程调用）
+     */
+    fun clear() {
+        results.clear()
+        invalidate()
+        Log.d(tag, "Cleared all results")
     }
 }
