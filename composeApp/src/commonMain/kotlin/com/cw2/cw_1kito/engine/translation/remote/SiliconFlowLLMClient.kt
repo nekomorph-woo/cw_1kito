@@ -1,5 +1,6 @@
 package com.cw2.cw_1kito.engine.translation.remote
 
+import com.cw2.cw_1kito.config.SystemMessageConfig
 import com.cw2.cw_1kito.data.config.ConfigManager
 import com.cw2.cw_1kito.engine.translation.ICloudLlmEngine
 import com.cw2.cw_1kito.model.ChatCompletionRequest
@@ -189,15 +190,19 @@ class SiliconFlowLLMClient(
         sourceLang: Language,
         targetLang: Language,
         customPrompt: String?,
+        model: LlmModel?,
         concurrency: Int
     ): List<String> {
+        // 使用传入的模型或当前模型
+        val useModel = model ?: currentModel
+
         if (texts.isEmpty()) return emptyList()
         if (texts.size == 1) {
-            return listOf(translate(texts[0], sourceLang, targetLang, customPrompt))
+            return listOf(translate(texts[0], sourceLang, targetLang, customPrompt, model))
         }
 
         val actualConcurrency = concurrency.coerceIn(1, 10)
-        Logger.d("[SiliconFlowLLM] 批量翻译 ${texts.size} 个文本，并发数: $actualConcurrency")
+        Logger.d("[SiliconFlowLLM] 批量翻译 ${texts.size} 个文本，并发数: $actualConcurrency，模型: ${useModel.displayName}")
 
         return coroutineScope {
             // 使用分块并发处理，避免同时发起过多请求
@@ -207,7 +212,7 @@ class SiliconFlowLLMClient(
             for ((chunkIndex, chunk) in chunks.withIndex()) {
                 val chunkResults = chunk.mapIndexed { itemIndex, text ->
                     async(Dispatchers.IO) {
-                        translate(text, sourceLang, targetLang, customPrompt)
+                        translate(text, sourceLang, targetLang, customPrompt, useModel)
                     }
                 }.awaitAll()
                 results.addAll(chunkResults)
@@ -237,8 +242,12 @@ class SiliconFlowLLMClient(
         text: String,
         sourceLang: Language,
         targetLang: Language,
-        customPrompt: String?
+        customPrompt: String?,
+        model: LlmModel?
     ): String {
+        // 使用传入的模型或当前模型
+        val useModel = model ?: currentModel
+
         return withContext(Dispatchers.Default) {
             val apiKey = getApiKey()
                 ?: throw com.cw2.cw_1kito.error.ApiKeyInvalidException("API Key 未设置")
@@ -249,16 +258,23 @@ class SiliconFlowLLMClient(
                 // 1. 构建翻译 Prompt
                 val prompt = customPrompt ?: buildTranslationPrompt(text, sourceLang, targetLang)
 
-                // 2. 构建请求
+                // 2. 构建请求（可选添加 system message）
                 val requestBuilder = ChatCompletionRequest.builder()
-                    .model(currentModel.modelId)
-                    .addMessage(ChatMessage.user(prompt))
+                    .model(useModel.modelId)
                     .temperature(0.7)
                     .maxTokens(2000)
                     .stream(false)
 
+                // 添加 system message（如果配置了的话）
+                SystemMessageConfig.getDecodedSystemMessage()?.let { systemContent ->
+                    requestBuilder.addMessage(ChatMessage.system(systemContent))
+                }
+
+                // 添加 user message
+                requestBuilder.addMessage(ChatMessage.user(prompt))
+
                 // Thinking 模型需要设置 enable_thinking=false
-                if (currentModel.isThinkingModel) {
+                if (useModel.isThinkingModel) {
                     requestBuilder.enableThinking(false)
                 }
 
@@ -392,9 +408,10 @@ class SiliconFlowLLMClient(
 
         /**
          * 翻译请求超时时间（毫秒）
-         * 默认 10 秒，LLM 翻译可能需要较长时间
+         * 默认 60 秒（1 分钟），本地 OCR 方案的云端 LLM 翻译可能需要较长时间
+         * 注意：此超时仅用于 LLM 文本翻译，不影响 VLM 图像识别的超时设置
          */
-        private const val TRANSLATION_TIMEOUT_MS = 10_000L
+        private const val TRANSLATION_TIMEOUT_MS = 60_000L
 
         /**
          * 创建默认 HTTP 客户端

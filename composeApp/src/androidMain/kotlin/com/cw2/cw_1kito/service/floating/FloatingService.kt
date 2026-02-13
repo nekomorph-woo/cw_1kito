@@ -41,6 +41,7 @@ import com.cw2.cw_1kito.model.CoordinateMode
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.MergedText
 import com.cw2.cw_1kito.model.MergingConfig
+import com.cw2.cw_1kito.model.ModelPoolConfig
 import com.cw2.cw_1kito.model.OcrDetection
 import com.cw2.cw_1kito.model.PerformanceMode
 import com.cw2.cw_1kito.model.TranslationMode
@@ -190,6 +191,11 @@ class FloatingService : Service() {
      */
     private var batchTranslationManager: com.cw2.cw_1kito.engine.translation.IBatchTranslationManager? = null
 
+    /**
+     * 配置变更监听 Job
+     */
+    private var configChangesJob: kotlinx.coroutines.Job? = null
+
     inner class LocalBinder : Binder() {
         fun getService(): FloatingService = this@FloatingService
     }
@@ -198,8 +204,16 @@ class FloatingService : Service() {
         super.onCreate()
         Log.d(TAG, "FloatingService onCreate")
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        // 初始化配置管理器（现在 applicationContext 可用了）
-        configManager = AndroidConfigManagerImpl(applicationContext)
+        // 使用单例配置管理器，确保与 MainViewModel 共享同一个实例
+        // 这样配置变更事件可以正确传递
+        if (com.cw2.cw_1kito.data.config.ConfigManagerProvider.isInitialized()) {
+            configManager = com.cw2.cw_1kito.data.config.ConfigManagerProvider.get()
+            Logger.d("[FloatingService] 使用共享的 ConfigManager 实例")
+        } else {
+            // 如果尚未初始化（不应该发生），创建新实例
+            configManager = AndroidConfigManagerImpl(applicationContext)
+            Logger.w("[FloatingService] ConfigManagerProvider 未初始化，创建新实例")
+        }
         // 初始化 ScreenCaptureManager（如果还未初始化）
         ScreenCaptureManager.init(this)
         // 监听权限过期事件
@@ -212,6 +226,46 @@ class FloatingService : Service() {
 
         // 初始化本地 OCR 翻译组件
         initializeLocalOcrComponents()
+
+        // 监听配置变更
+        startConfigChangesListener()
+    }
+
+    /**
+     * 启动配置变更监听
+     *
+     * 监听配置变更事件，当模型池配置变更时更新 BatchTranslationManager。
+     */
+    private fun startConfigChangesListener() {
+        configChangesJob = serviceScope.launch {
+            configManager.configChanges.collect { change ->
+                when (change) {
+                    is com.cw2.cw_1kito.data.config.ConfigChange.ModelPoolConfigChanged -> {
+                        Logger.d("[FloatingService] 收到模型池配置变更事件: ${change.config.models.map { it.displayName }}")
+                        // 更新现有的 BatchTranslationManager 配置
+                        val manager = batchTranslationManager
+                        if (manager != null) {
+                            (manager as? com.cw2.cw_1kito.engine.translation.BatchTranslationManagerImpl)?.updateModelPoolConfig(change.config)
+                            Logger.d("[FloatingService] BatchTranslationManager 模型池配置已更新")
+                        } else {
+                            Logger.d("[FloatingService] BatchTranslationManager 尚未创建，配置将在首次翻译时加载")
+                        }
+                    }
+                    // 可以根据需要监听其他配置变更
+                    else -> {
+                        // 忽略其他配置变更
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 停止配置变更监听
+     */
+    private fun stopConfigChangesListener() {
+        configChangesJob?.cancel()
+        configChangesJob = null
     }
 
     /**
@@ -260,6 +314,7 @@ class FloatingService : Service() {
         super.onDestroy()
         Log.d(TAG, "FloatingService onDestroy")
         ScreenCaptureManager.setOnPermissionExpiredListener(null)
+        stopConfigChangesListener()
         serviceScope.cancel()
         removeFloatingView()
         hideOverlay()
@@ -1103,11 +1158,14 @@ class FloatingService : Service() {
 
             // 创建或复用批量翻译管理器
             if (batchTranslationManager == null) {
+                // 获取当前模型池配置
+                val modelPoolConfig = configManager.getModelPoolConfig()
                 batchTranslationManager = BatchTranslationManagerFactory.create(
                     localTranslationEngine = localTranslator!!,
                     cloudLlmEngine = cloudLlmTranslator!!,
                     configManager = configManager,
-                    batchSize = com.cw2.cw_1kito.engine.translation.IBatchTranslationManager.DEFAULT_BATCH_SIZE
+                    batchSize = com.cw2.cw_1kito.engine.translation.IBatchTranslationManager.DEFAULT_BATCH_SIZE,
+                    initialModelPoolConfig = modelPoolConfig
                 )
             }
 
@@ -1171,11 +1229,14 @@ class FloatingService : Service() {
 
         // 创建或复用批量翻译管理器
         if (batchTranslationManager == null) {
+            // 获取当前模型池配置
+            val modelPoolConfig = configManager.getModelPoolConfig()
             batchTranslationManager = BatchTranslationManagerFactory.create(
                 localTranslationEngine = localTranslator!!,
                 cloudLlmEngine = cloudLlmTranslator!!,
                 configManager = configManager,
-                batchSize = com.cw2.cw_1kito.engine.translation.IBatchTranslationManager.DEFAULT_BATCH_SIZE
+                batchSize = com.cw2.cw_1kito.engine.translation.IBatchTranslationManager.DEFAULT_BATCH_SIZE,
+                initialModelPoolConfig = modelPoolConfig
             )
         }
 

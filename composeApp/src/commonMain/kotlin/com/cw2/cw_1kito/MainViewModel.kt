@@ -6,6 +6,7 @@ import com.cw2.cw_1kito.data.api.TranslationApiClientImpl
 import com.cw2.cw_1kito.data.config.ConfigManager
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.LanguageModelState
+import com.cw2.cw_1kito.model.ModelPoolConfig
 import com.cw2.cw_1kito.model.OcrLanguage
 import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.model.LlmModel
@@ -105,11 +106,6 @@ class MainViewModel(
                 val localOcrTranslationMode = configManager.getLocalOcrTranslationMode()
                 _uiState.update { it.copy(localOcrTranslationMode = localOcrTranslationMode) }
 
-                // 加载云端 LLM 模型
-                val cloudLlmModelId = configManager.getCloudLlmModel()
-                val cloudLlmModel = LlmModel.fromModelId(cloudLlmModelId) ?: LlmModel.DEFAULT
-                _uiState.update { it.copy(cloudLlmModel = cloudLlmModel) }
-
                 // 加载云端 LLM 提示词
                 val cloudLlmPrompt = configManager.getCustomTranslationPrompt()
                 _uiState.update { it.copy(cloudLlmPrompt = cloudLlmPrompt) }
@@ -117,6 +113,10 @@ class MainViewModel(
                 // 加载合并阈值配置
                 val mergingConfig = configManager.getMergingConfig()
                 _uiState.update { it.copy(mergingConfig = mergingConfig) }
+
+                // 加载模型池配置
+                val modelPoolConfig = configManager.getModelPoolConfig()
+                _uiState.update { it.copy(modelPoolConfig = modelPoolConfig) }
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "加载配置失败", e)
             }
@@ -383,16 +383,6 @@ class MainViewModel(
                     }
                 }
             }
-            is SettingsEvent.CloudLlmModelChanged -> {
-                _uiState.update { it.copy(cloudLlmModel = event.model) }
-                viewModelScope.launch {
-                    try {
-                        configManager.saveCloudLlmModel(event.model.modelId)
-                    } catch (e: Exception) {
-                        android.util.Log.e("MainViewModel", "保存云端LLM模型失败", e)
-                    }
-                }
-            }
             is SettingsEvent.CloudLlmPromptChanged -> {
                 _uiState.update { it.copy(cloudLlmPrompt = event.prompt) }
                 viewModelScope.launch {
@@ -441,6 +431,18 @@ class MainViewModel(
                         android.util.Log.d("MainViewModel", "合并配置已保存: ${event.config}")
                     } catch (e: Exception) {
                         android.util.Log.e("MainViewModel", "保存合并配置失败", e)
+                    }
+                }
+            }
+            // ========== 模型池配置事件处理 ==========
+            is SettingsEvent.ModelPoolConfigChanged -> {
+                _uiState.update { it.copy(modelPoolConfig = event.config) }
+                viewModelScope.launch {
+                    try {
+                        configManager.saveModelPoolConfig(event.config)
+                        android.util.Log.d("MainViewModel", "模型池配置已保存: ${event.config}")
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "保存模型池配置失败", e)
                     }
                 }
             }

@@ -7,6 +7,7 @@ import com.cw2.cw_1kito.model.OcrLanguage
 import com.cw2.cw_1kito.model.PerformanceMode
 import com.cw2.cw_1kito.model.TranslationMode
 import com.cw2.cw_1kito.model.MergingConfig
+import com.cw2.cw_1kito.model.ModelPoolConfig
 import com.cw2.cw_1kito.ui.theme.ThemeConfig
 import com.cw2.cw_1kito.ui.theme.ThemeHue
 import com.cw2.cw_1kito.ui.theme.DarkModeOption
@@ -141,8 +142,8 @@ abstract class ConfigManagerImpl : ConfigManager {
         remove(USE_LOCAL_OCR_SCHEME_KEY)
         remove(LOCAL_OCR_TRANSLATION_MODE_KEY)
         remove(OCR_LANGUAGE_KEY)
-        remove(CLOUD_LLM_MODEL_KEY)
         remove(CUSTOM_TRANSLATION_PROMPT_KEY)
+        remove(MODEL_POOL_CONFIG_KEY)
     }
 
     override suspend fun getCustomPrompt(): String? {
@@ -267,15 +268,6 @@ abstract class ConfigManagerImpl : ConfigManager {
         _configChanges.trySend(ConfigChange.LocalOcrTranslationModeChanged(mode))
     }
 
-    override suspend fun getCloudLlmModel(): String {
-        return getString(CLOUD_LLM_MODEL_KEY) ?: DEFAULT_CLOUD_LLM_MODEL
-    }
-
-    override suspend fun saveCloudLlmModel(modelId: String) {
-        saveString(CLOUD_LLM_MODEL_KEY, modelId)
-        _configChanges.trySend(ConfigChange.CloudLlmModelChanged(modelId))
-    }
-
     override suspend fun getCustomTranslationPrompt(): String? {
         return getString(CUSTOM_TRANSLATION_PROMPT_KEY)
     }
@@ -302,6 +294,25 @@ abstract class ConfigManagerImpl : ConfigManager {
         _configChanges.trySend(ConfigChange.OcrLanguageChanged(language))
     }
 
+    override suspend fun getModelPoolConfig(): ModelPoolConfig {
+        val configJson = getString(MODEL_POOL_CONFIG_KEY)
+        return if (configJson != null) {
+            try {
+                json.decodeFromString<ModelPoolConfig>(configJson)
+            } catch (e: Exception) {
+                ModelPoolConfig.DEFAULT
+            }
+        } else {
+            ModelPoolConfig.DEFAULT
+        }
+    }
+
+    override suspend fun saveModelPoolConfig(config: ModelPoolConfig) {
+        val configJson = json.encodeToString(ModelPoolConfig.serializer(), config)
+        saveString(MODEL_POOL_CONFIG_KEY, configJson)
+        _configChanges.trySend(ConfigChange.ModelPoolConfigChanged(config))
+    }
+
     companion object {
         private const val CUSTOM_PROMPT_KEY = "custom_prompt"
         private const val STREAMING_ENABLED_KEY = "lab_streaming_enabled"
@@ -318,11 +329,8 @@ abstract class ConfigManagerImpl : ConfigManager {
         private const val USE_LOCAL_OCR_SCHEME_KEY = "use_local_ocr_scheme"
         private const val LOCAL_OCR_TRANSLATION_MODE_KEY = "local_ocr_translation_mode"
         private const val OCR_LANGUAGE_KEY = "ocr_language"
-        private const val CLOUD_LLM_MODEL_KEY = "cloud_llm_model"
         private const val CUSTOM_TRANSLATION_PROMPT_KEY = "custom_translation_prompt"
-
-        // 默认值
-        private const val DEFAULT_CLOUD_LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+        private const val MODEL_POOL_CONFIG_KEY = "model_pool_config"
     }
 }
 

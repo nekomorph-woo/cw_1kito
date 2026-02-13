@@ -2,11 +2,12 @@ package com.cw2.cw_1kito.data.config
 
 import com.cw2.cw_1kito.model.Language
 import com.cw2.cw_1kito.model.LanguageConfig
+import com.cw2.cw_1kito.model.MergingConfig
+import com.cw2.cw_1kito.model.ModelPoolConfig
 import com.cw2.cw_1kito.model.OcrLanguage
-import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.model.PerformanceMode
 import com.cw2.cw_1kito.model.TranslationMode
-import com.cw2.cw_1kito.model.MergingConfig
+import com.cw2.cw_1kito.model.VlmModel
 import com.cw2.cw_1kito.ui.theme.ThemeConfig
 import kotlinx.coroutines.flow.Flow
 
@@ -175,16 +176,6 @@ interface ConfigManager {
     suspend fun saveLocalOcrTranslationMode(mode: TranslationMode)
 
     /**
-     * 获取云端LLM模型ID
-     */
-    suspend fun getCloudLlmModel(): String
-
-    /**
-     * 保存云端LLM模型ID
-     */
-    suspend fun saveCloudLlmModel(modelId: String)
-
-    /**
      * 获取自定义翻译提示词
      */
     suspend fun getCustomTranslationPrompt(): String?
@@ -193,6 +184,24 @@ interface ConfigManager {
      * 保存自定义翻译提示词
      */
     suspend fun saveCustomTranslationPrompt(prompt: String?)
+
+    /**
+     * 获取模型池配置
+     *
+     * 模型池用于管理多个云端翻译模型，分散 RPM 请求压力。
+     *
+     * @return 模型池配置，默认仅包含 GLM-4.6V 模型
+     */
+    suspend fun getModelPoolConfig(): ModelPoolConfig
+
+    /**
+     * 保存模型池配置
+     *
+     * 保存后触发 [ConfigChange.ModelPoolConfigChanged] 事件。
+     *
+     * @param config 模型池配置
+     */
+    suspend fun saveModelPoolConfig(config: ModelPoolConfig)
 
     /**
      * 清除所有配置
@@ -224,5 +233,11 @@ sealed class ConfigChange {
     data class LocalOcrSchemeChanged(val useLocalOcr: Boolean) : ConfigChange()
     data class LocalOcrTranslationModeChanged(val mode: TranslationMode) : ConfigChange()
     data class OcrLanguageChanged(val language: OcrLanguage?) : ConfigChange()
-    data class CloudLlmModelChanged(val modelId: String) : ConfigChange()
+
+    /**
+     * 模型池配置变更事件
+     *
+     * @param config 新的模型池配置
+     */
+    data class ModelPoolConfigChanged(val config: ModelPoolConfig) : ConfigChange()
 }

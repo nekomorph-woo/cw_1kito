@@ -1,6 +1,7 @@
 package com.cw2.cw_1kito.engine.translation
 
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.LlmModel
 
 /**
  * 云端 LLM 翻译引擎接口
@@ -20,6 +21,7 @@ interface ICloudLlmEngine {
      * @param sourceLang 源语言
      * @param targetLang 目标语言
      * @param customPrompt 自定义提示词（可选，为 null 时使用默认提示词）
+     * @param model 模型（可选，为 null 时使用配置中的默认模型，非 null 时使用指定的模型）
      * @return 翻译后的文本
      * @throws com.cw2.cw_1kito.error.ApiKeyInvalidException API Key 无效
      * @throws com.cw2.cw_1kito.error.RateLimitException API 配额超限
@@ -30,7 +32,8 @@ interface ICloudLlmEngine {
         text: String,
         sourceLang: Language,
         targetLang: Language,
-        customPrompt: String? = null
+        customPrompt: String? = null,
+        model: LlmModel? = null
     ): String
 
     /**
@@ -42,7 +45,8 @@ interface ICloudLlmEngine {
      * @param sourceLang 源语言
      * @param targetLang 目标语言
      * @param customPrompt 自定义提示词（可选）
-     * @param concurrency 并发数，默认 8
+     * @param model 模型（可选，为 null 时使用配置中的默认模型，非 null 时使用指定的模型）
+     * @param concurrency 并发数，默认 5
      * @return 翻译后的文本列表（顺序与输入一致）
      * @throws com.cw2.cw_1kito.error.ApiKeyInvalidException API Key 无效
      * @throws com.cw2.cw_1kito.error.RateLimitException API 配额超限
@@ -54,6 +58,7 @@ interface ICloudLlmEngine {
         sourceLang: Language,
         targetLang: Language,
         customPrompt: String? = null,
+        model: LlmModel? = null,
         concurrency: Int = 5
     ): List<String>
 

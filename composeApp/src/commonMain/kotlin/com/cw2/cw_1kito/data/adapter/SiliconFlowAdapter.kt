@@ -1,5 +1,6 @@
 package com.cw2.cw_1kito.data.adapter
 
+import com.cw2.cw_1kito.config.SystemMessageConfig
 import com.cw2.cw_1kito.data.api.*
 import com.cw2.cw_1kito.model.BoundingBox
 import com.cw2.cw_1kito.model.Language
@@ -21,25 +22,46 @@ class SiliconFlowAdapter : TranslationApiAdapter {
     }
 
     override fun toExternalRequest(request: TranslationApiRequest): SiliconFlowRequest {
-        return SiliconFlowRequest(
-            model = request.model.id,
-            messages = listOf(
+        // 构建消息列表，可选添加 system message
+        val messages = mutableListOf<SiliconFlowMessage>()
+
+        // 添加 system message（如果配置了的话）
+        SystemMessageConfig.getDecodedSystemMessage()?.let { systemContent ->
+            messages.add(
                 SiliconFlowMessage(
-                    role = "user",
+                    role = "system",
                     content = listOf(
                         SiliconFlowContent(
                             type = "text",
-                            text = buildPrompt(request.targetLanguage)
-                        ),
-                        SiliconFlowContent(
-                            type = "image_url",
-                            imageUrl = ImageUrl(
-                                url = "data:image/jpeg;base64,${request.imageData}"
-                            )
+                            text = systemContent
                         )
                     )
                 )
-            ),
+            )
+        }
+
+        // 添加 user message
+        messages.add(
+            SiliconFlowMessage(
+                role = "user",
+                content = listOf(
+                    SiliconFlowContent(
+                        type = "text",
+                        text = buildPrompt(request.targetLanguage)
+                    ),
+                    SiliconFlowContent(
+                        type = "image_url",
+                        imageUrl = ImageUrl(
+                            url = "data:image/jpeg;base64,${request.imageData}"
+                        )
+                    )
+                )
+            )
+        )
+
+        return SiliconFlowRequest(
+            model = request.model.id,
+            messages = messages,
             temperature = request.temperature,
             maxTokens = request.maxTokens,
             stream = false

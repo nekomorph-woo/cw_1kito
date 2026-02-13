@@ -1,5 +1,6 @@
 package com.cw2.cw_1kito.engine.translation.remote
 
+import com.cw2.cw_1kito.config.SystemMessageConfig
 import com.cw2.cw_1kito.data.config.ConfigManager
 import com.cw2.cw_1kito.error.*
 import com.cw2.cw_1kito.model.ChatCompletionRequest
@@ -170,14 +171,22 @@ class SiliconFlowClient(
                 // 1. 构建翻译 Prompt
                 val prompt = buildTranslationPrompt(text, sourceLang, targetLang)
 
-                // 2. 构建请求
-                val request = ChatCompletionRequest.builder()
+                // 2. 构建请求（可选添加 system message）
+                val requestBuilder = ChatCompletionRequest.builder()
                     .model(DEFAULT_MODEL)
-                    .addMessage(ChatMessage.user(prompt))
                     .temperature(0.7)
                     .maxTokens(2000)
                     .stream(false)  // 批量模式,非流式
-                    .build()
+
+                // 添加 system message（如果配置了的话）
+                SystemMessageConfig.getDecodedSystemMessage()?.let { systemContent ->
+                    requestBuilder.addMessage(ChatMessage.system(systemContent))
+                }
+
+                // 添加 user message
+                requestBuilder.addMessage(ChatMessage.user(prompt))
+
+                val request = requestBuilder.build()
 
                 Logger.translationStart(1)
 

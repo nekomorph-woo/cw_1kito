@@ -65,8 +65,8 @@ android {
         applicationId = "com.cw2.cw_1kito"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 32
+        versionName = "0.3.2"
     }
     packaging {
         resources {

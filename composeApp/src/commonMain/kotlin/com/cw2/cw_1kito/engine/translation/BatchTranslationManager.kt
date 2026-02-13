@@ -2,6 +2,8 @@ package com.cw2.cw_1kito.engine.translation
 
 import com.cw2.cw_1kito.engine.translation.local.ILocalTranslationEngine
 import com.cw2.cw_1kito.model.Language
+import com.cw2.cw_1kito.model.LlmModel
+import com.cw2.cw_1kito.model.ModelPoolConfig
 import com.cw2.cw_1kito.model.TranslationMode
 import com.cw2.cw_1kito.util.Logger
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +92,7 @@ interface IBatchTranslationManager {
  * - 使用 Dispatchers.IO 进行网络请求
  * - 分批处理避免同时发起过多请求
  * - 云端翻译模式使用内置批量 API，减少网络往返
+ * - 模型池集成：支持多模型分散 RPM 压力
  *
  * ## 错误处理
  * - 单个翻译失败时记录日志并返回原文
@@ -98,17 +101,38 @@ interface IBatchTranslationManager {
  * @property localTranslationEngine 本地翻译引擎
  * @property cloudLlmEngine 云端 LLM 翻译引擎
  * @property configManager 配置管理器（用于获取自定义提示词）
- * @property batchSize 批次大小，默认 3
+ * @property batchSize 批次大小，默认 5
+ * @property rpmTracker RPM 追踪器，用于模型池限流控制
+ * @property initialModelPoolConfig 初始模型池配置，默认为单模型配置
  */
 class BatchTranslationManagerImpl(
     private val localTranslationEngine: ILocalTranslationEngine,
     private val cloudLlmEngine: ICloudLlmEngine,
     private val configManager: com.cw2.cw_1kito.data.config.ConfigManager,
-    private val batchSize: Int = IBatchTranslationManager.DEFAULT_BATCH_SIZE
+    private val batchSize: Int = IBatchTranslationManager.DEFAULT_BATCH_SIZE,
+    private val rpmTracker: ModelRpmTracker = ModelRpmTracker(),
+    initialModelPoolConfig: ModelPoolConfig = ModelPoolConfig.DEFAULT
 ) : IBatchTranslationManager {
 
     private val actualBatchSize: Int
         get() = batchSize.coerceIn(IBatchTranslationManager.MIN_BATCH_SIZE, IBatchTranslationManager.MAX_BATCH_SIZE)
+
+    /**
+     * 当前模型池配置
+     */
+    private var currentModelPoolConfig: ModelPoolConfig = initialModelPoolConfig
+
+    /**
+     * 更新模型池配置
+     *
+     * 在运行时动态更新模型池配置，新请求将使用新配置。
+     *
+     * @param config 新的模型池配置
+     */
+    fun updateModelPoolConfig(config: ModelPoolConfig) {
+        Logger.d("[BatchTranslationManager] 更新模型池配置: ${config.models.map { it.displayName }}")
+        currentModelPoolConfig = config
+    }
 
     override suspend fun translateBatch(
         texts: List<String>,
@@ -144,9 +168,9 @@ class BatchTranslationManagerImpl(
     }
 
     /**
-     * 使用云端批量翻译 API
+     * 使用云端批量翻译 API（集成模型池）
      *
-     * 直接调用 cloudLlmEngine.translateBatch()，利用客户端内置的并发处理。
+     * 使用模型池选择器进行多模型并发翻译，分散 RPM 压力。
      *
      * @param texts 待翻译文本列表
      * @param sourceLang 源语言
@@ -161,34 +185,82 @@ class BatchTranslationManagerImpl(
         onBatchComplete: ((Int, Int) -> Unit)?
     ): List<String> {
         val customPrompt = configManager.getCustomTranslationPrompt()
+        val modelSelector = ModelSelector(currentModelPoolConfig, rpmTracker)
 
-        Logger.d("[BatchTranslationManager] 云端批量翻译: ${texts.size} 个文本, 并发数: $actualBatchSize")
+        Logger.d("[BatchTranslationManager] 云端批量翻译(模型池): ${texts.size} 个文本, 并发数: $actualBatchSize")
 
         return try {
-            val results = cloudLlmEngine.translateBatch(
-                texts = texts,
-                sourceLang = sourceLang,
-                targetLang = targetLang,
-                customPrompt = customPrompt,
-                concurrency = actualBatchSize
-            )
+            // 使用模型池进行并发翻译
+            val results = coroutineScope {
+                texts.mapIndexed { index, text ->
+                    async(Dispatchers.IO) {
+                        translateSingleWithModelPool(
+                            text = text,
+                            sourceLang = sourceLang,
+                            targetLang = targetLang,
+                            customPrompt = customPrompt,
+                            modelSelector = modelSelector
+                        )
+                    }
+                }.awaitAll()
+            }
 
-            // 触发完成回调（云端批量 API 是一次性完成）
+            // 触发完成回调
             onBatchComplete?.invoke(1, 1)
             Logger.i("[BatchTranslationManager] 云端批量翻译完成: ${results.size} 个结果")
 
             results
+        } catch (e: ModelPoolExhaustedException) {
+            Logger.e(e, "[BatchTranslationManager] 模型池耗尽，所有模型达到 RPM 限制")
+            // 模型池耗尽时返回原文列表
+            texts.map { it }
         } catch (e: Exception) {
-            Logger.e(e, "[BatchTranslationManager] 云端批量翻译失败，降级到单条翻译")
-            // 降级：使用单条翻译逐个处理
-            texts.map { text ->
-                try {
-                    cloudLlmEngine.translate(text, sourceLang, targetLang, customPrompt)
-                } catch (e2: Exception) {
-                    Logger.e(e2, "[BatchTranslationManager] 单条翻译也失败: ${text.take(30)}...")
-                    text
-                }
-            }
+            Logger.e(e, "[BatchTranslationManager] 云端批量翻译失败")
+            // 其他异常时返回原文列表
+            texts.map { it }
+        }
+    }
+
+    /**
+     * 使用模型池翻译单个文本
+     *
+     * 从模型池中选择可用模型进行翻译，支持故障转移。
+     *
+     * @param text 待翻译文本
+     * @param sourceLang 源语言
+     * @param targetLang 目标语言
+     * @param customPrompt 自定义提示词
+     * @param modelSelector 模型选择器
+     * @return 翻译结果
+     * @throws ModelPoolExhaustedException 所有模型都达到 RPM 限制
+     */
+    private suspend fun translateSingleWithModelPool(
+        text: String,
+        sourceLang: Language,
+        targetLang: Language,
+        customPrompt: String?,
+        modelSelector: ModelSelector
+    ): String {
+        // 1. 从模型池选择可用模型（最多等待 3 秒）
+        val model = modelSelector.selectModelWithWait(maxWaitMs = 3000)
+            ?: throw ModelPoolExhaustedException()
+
+        // 2. 记录请求（在选择后、发送前）
+        rpmTracker.recordRequest(model)
+
+        // 3. 发起翻译请求
+        return try {
+            cloudLlmEngine.translate(
+                text = text,
+                sourceLang = sourceLang,
+                targetLang = targetLang,
+                customPrompt = customPrompt,
+                model = model
+            )
+        } catch (e: Exception) {
+            // 请求失败时不回退 RPM 计数（设计决定：简化逻辑）
+            Logger.e(e, "[BatchTranslationManager] 模型 ${model.displayName} 翻译失败: ${text.take(30)}...")
+            throw e
         }
     }
 
@@ -353,20 +425,26 @@ object BatchTranslationManagerFactory {
      * @param localTranslationEngine 本地翻译引擎
      * @param cloudLlmEngine 云端 LLM 翻译引擎
      * @param configManager 配置管理器（用于获取自定义翻译提示词）
-     * @param batchSize 批次大小，默认 3
+     * @param batchSize 批次大小，默认 5
+     * @param rpmTracker RPM 追踪器（可选，默认创建新实例）
+     * @param initialModelPoolConfig 初始模型池配置（可选，默认单模型）
      * @return 批量翻译管理器实例
      */
     fun create(
         localTranslationEngine: ILocalTranslationEngine,
         cloudLlmEngine: ICloudLlmEngine,
         configManager: com.cw2.cw_1kito.data.config.ConfigManager,
-        batchSize: Int = IBatchTranslationManager.DEFAULT_BATCH_SIZE
+        batchSize: Int = IBatchTranslationManager.DEFAULT_BATCH_SIZE,
+        rpmTracker: ModelRpmTracker = ModelRpmTracker(),
+        initialModelPoolConfig: ModelPoolConfig = ModelPoolConfig.DEFAULT
     ): IBatchTranslationManager {
         return BatchTranslationManagerImpl(
             localTranslationEngine = localTranslationEngine,
             cloudLlmEngine = cloudLlmEngine,
             configManager = configManager,
-            batchSize = batchSize
+            batchSize = batchSize,
+            rpmTracker = rpmTracker,
+            initialModelPoolConfig = initialModelPoolConfig
         )
     }
 }

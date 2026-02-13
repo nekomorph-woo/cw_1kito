@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.cw2.cw_1kito.data.config.AndroidConfigManagerImpl
+import com.cw2.cw_1kito.data.config.ConfigManagerProvider
 import com.cw2.cw_1kito.engine.translation.local.DownloadResult
 import com.cw2.cw_1kito.engine.translation.local.LanguagePackStartupChecker
 import com.cw2.cw_1kito.engine.translation.local.MLKitLanguagePackManager
@@ -61,10 +62,12 @@ class MainActivity : ComponentActivity() {
         refreshPermissionStatus()
     }
 
-    // 创建 ViewModel
+    // 创建 ViewModel（使用 ConfigManagerProvider 确保单例）
     private val viewModel: MainViewModel by viewModels {
+        // 初始化单例配置管理器
+        ConfigManagerProvider.init(applicationContext)
         val permissionManager = PermissionManagerImpl(applicationContext)
-        val configManager = AndroidConfigManagerImpl(applicationContext)
+        val configManager = ConfigManagerProvider.get()
         MainViewModelFactory(permissionManager, configManager)
     }
 
@@ -73,11 +76,11 @@ class MainActivity : ComponentActivity() {
         MLKitLanguagePackManager(applicationContext)
     }
 
-    // 语言包启动检查器（懒加载，仅在需要时初始化）
+    // 语言包启动检查器（懒加载，仅在需要时初始化，使用单例 ConfigManager）
     private val languagePackStartupChecker by lazy {
         LanguagePackStartupChecker(
             context = applicationContext,
-            configManager = AndroidConfigManagerImpl(applicationContext),
+            configManager = ConfigManagerProvider.get(),
             languagePackManager = languagePackManager
         )
     }
@@ -85,6 +88,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // 确保 ConfigManager 已初始化
+        ConfigManagerProvider.init(applicationContext)
 
         // 初始化 ScreenCaptureManager
         ScreenCaptureManager.init(applicationContext)

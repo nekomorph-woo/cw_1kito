@@ -33,7 +33,9 @@ import com.cw2.cw_1kito.ui.component.ModelSection
 import com.cw2.cw_1kito.ui.component.PermissionSection
 import com.cw2.cw_1kito.ui.component.SchemeSwitcher
 import com.cw2.cw_1kito.ui.component.TranslationModeSelector
-import com.cw2.cw_1kito.ui.component.CloudLlmConfigEditor
+import com.cw2.cw_1kito.ui.component.CloudLlmPromptEditor
+import com.cw2.cw_1kito.ui.component.ModelPoolSelector
+import com.cw2.cw_1kito.model.ModelPoolConfig
 import com.cw2.cw_1kito.ui.theme.ThemeConfig
 
 /**
@@ -113,8 +115,6 @@ data class SettingsUiState(
     // ========== 本地 OCR 新增配置 ==========
     /** 本地 OCR 翻译模式 */
     val localOcrTranslationMode: TranslationMode = TranslationMode.LOCAL,
-    /** 云端 LLM 模型配置 */
-    val cloudLlmModel: LlmModel = LlmModel.DEFAULT,
     /** 云端 LLM 自定义提示词 */
     val cloudLlmPrompt: String? = null,
     /** 是否显示语言包管理界面 */
@@ -126,7 +126,11 @@ data class SettingsUiState(
 
     // ========== 合并配置 ==========
     /** 合并阈值配置 */
-    val mergingConfig: com.cw2.cw_1kito.model.MergingConfig = com.cw2.cw_1kito.model.MergingConfig.DEFAULT
+    val mergingConfig: com.cw2.cw_1kito.model.MergingConfig = com.cw2.cw_1kito.model.MergingConfig.DEFAULT,
+
+    // ========== 模型池配置 ==========
+    /** 模型池配置 */
+    val modelPoolConfig: ModelPoolConfig = ModelPoolConfig.DEFAULT
 ) {
     val isApiKeyConfigured: Boolean
         get() = apiKey.isNotEmpty() && isApiKeyValid
@@ -172,8 +176,6 @@ sealed class SettingsEvent {
     // ========== 本地 OCR 新增事件 ==========
     /** 本地 OCR 翻译模式变更 */
     data class LocalOcrTranslationModeChanged(val mode: TranslationMode) : SettingsEvent()
-    /** 云端 LLM 模型变更 */
-    data class CloudLlmModelChanged(val model: LlmModel) : SettingsEvent()
     /** 云端 LLM 提示词变更 */
     data class CloudLlmPromptChanged(val prompt: String) : SettingsEvent()
     /** 重置云端 LLM 提示词为默认 */
@@ -194,6 +196,10 @@ sealed class SettingsEvent {
     // ========== 合并配置事件 ==========
     /** 合并配置变更 */
     data class MergingConfigChanged(val config: com.cw2.cw_1kito.model.MergingConfig) : SettingsEvent()
+
+    // ========== 模型池配置事件 ==========
+    /** 模型池配置变更 */
+    data class ModelPoolConfigChanged(val config: ModelPoolConfig) : SettingsEvent()
 }
 
 /**
@@ -554,15 +560,28 @@ private fun LocalOcrTabContent(
                 animationSpec = tween(durationMillis = 300)
             )
         ) {
-            CloudLlmConfigEditor(
-                selectedModel = uiState.cloudLlmModel,
-                onModelChanged = { onEvent(SettingsEvent.CloudLlmModelChanged(it)) },
-                customPrompt = uiState.cloudLlmPrompt,
-                onPromptChanged = { onEvent(SettingsEvent.CloudLlmPromptChanged(it)) },
-                onResetPrompt = { onEvent(SettingsEvent.ResetCloudLlmPrompt) },
-                sourceLanguage = uiState.sourceLanguage,
-                targetLanguage = uiState.targetLanguage
-            )
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // 模型池配置（包含首选模型和备用模型）
+                ModelPoolSelector(
+                    config = uiState.modelPoolConfig,
+                    onConfigChange = { newConfig ->
+                        onEvent(SettingsEvent.ModelPoolConfigChanged(newConfig))
+                    }
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                // 翻译提示词配置
+                CloudLlmPromptEditor(
+                    customPrompt = uiState.cloudLlmPrompt,
+                    onPromptChanged = { onEvent(SettingsEvent.CloudLlmPromptChanged(it)) },
+                    onResetPrompt = { onEvent(SettingsEvent.ResetCloudLlmPrompt) },
+                    sourceLanguage = uiState.sourceLanguage,
+                    targetLanguage = uiState.targetLanguage
+                )
+            }
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
