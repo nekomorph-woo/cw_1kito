@@ -23,6 +23,14 @@ kotlin {
             implementation(libs.timber)
             // DataStore - Android specific
             implementation(libs.androidx.datastore.preferences)
+            // Security - EncryptedSharedPreferences for API Key
+            implementation(libs.androidx.security.crypto)
+            // Google ML Kit - 本地 OCR 和翻译引擎
+            implementation(libs.google.mlkit.text.recognition)
+            implementation(libs.google.mlkit.text.recognition.chinese)
+            implementation(libs.google.mlkit.text.recognition.japanese)
+            implementation(libs.google.mlkit.text.recognition.korean)
+            implementation(libs.google.mlkit.translation)
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
