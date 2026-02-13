@@ -36,6 +36,8 @@
 | **序列化** | Kotlinx Serialization | 1.6.2 |
 | **日志** | Timber | 5.0.1 |
 | **权限** | Accompanist Permissions | 0.36.0 |
+| **本地 OCR** | Google ML Kit Text Recognition | 19.0.0 |
+| **本地翻译** | Google ML Kit Translation | 19.0.0 |
 | **构建** | Gradle (Kotlin DSL) | - |
 | **目标平台** | Android (API 24-36) | - |
 | **JVM 目标** | Java 11 | - |
@@ -252,6 +254,76 @@ fun TranslationOverlayPreview() {
 ---
 
 ## Android 特定规范
+
+### 本地 OCR 引擎 (Google ML Kit)
+
+#### 依赖配置
+```kotlin
+// gradle/libs.versions.toml
+mlkit = "19.0.0"
+
+// composeApp/build.gradle.kts
+implementation(libs.google.mlkit.text.recognition)
+implementation(libs.google.mlkit.translation)
+```
+
+#### ML Kit Text Recognition 使用
+```kotlin
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+
+class MLKitOCRManager(context: Context) : IOcrEngine {
+    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+    override suspend fun recognize(bitmap: Bitmap): List<OcrDetection> {
+        return suspendCancellableCoroutine { continuation ->
+            val image = InputImage.fromBitmap(bitmap, 0)
+            recognizer.process(image)
+                .addOnSuccessListener { result ->
+                    val detections = result.textBlocks.map { block ->
+                        OcrDetection(
+                            text = block.text,
+                            boundingBox = convertToBoundingBox(block.boundingBox),
+                            confidence = block.confidence ?: 0f,
+                            angle = 0f
+                        )
+                    }
+                    continuation.resume(detections)
+                }
+                .addOnFailureListener { e ->
+                    continuation.resumeWithException(e)
+                }
+        }
+    }
+}
+```
+
+#### ML Kit Translation 使用
+```kotlin
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
+
+class MLKitTranslator(context: Context) : ILocalTranslationEngine {
+    private var translator: Translator? = null
+
+    suspend fun downloadModel(sourceLanguage: String, targetLanguage: String) {
+        val options = TranslatorOptions.Builder()
+            .setSourceLanguage(TranslateLanguage.fromLanguageTag(sourceLanguage)!!)
+            .setTargetLanguage(TranslateLanguage.fromLanguageTag(targetLanguage)!!)
+            .build()
+
+        translator = Translation.getClient(options)
+        translator?.downloadModelIfNeeded()
+    }
+
+    override suspend fun translate(text: String, targetLanguage: String): String {
+        return translator?.translate(text) ?: text
+    }
+}
+```
+
+---
 
 ### 悬浮窗 (Floating Window)
 
