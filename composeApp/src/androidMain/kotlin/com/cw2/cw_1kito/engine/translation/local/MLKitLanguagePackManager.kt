@@ -448,6 +448,12 @@ class MLKitLanguagePackManager(
             val model = TranslateRemoteModel.Builder(langCode).build()
             if (isModelDownloaded(model)) {
                 deleteModel(model)
+                // 验证是否真正删除
+                val stillDownloaded = isModelDownloaded(model)
+                if (stillDownloaded) {
+                    Logger.w("[LangPack] 语言模型删除后仍存在（可能为系统内置模型）：${language.code}")
+                    return@withContext false
+                }
                 Logger.i("[LangPack] 语言模型删除成功：${language.code}")
             }
             true

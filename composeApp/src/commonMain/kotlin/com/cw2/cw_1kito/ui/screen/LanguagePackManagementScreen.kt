@@ -325,6 +325,7 @@ private fun LanguageModelItem(
 
                 ModelActionButton(
                     status = state.status,
+                    isBuiltIn = state.language == Language.EN,
                     onDownload = onDownload,
                     onDelete = onDelete
                 )
@@ -385,13 +386,23 @@ private fun ModelStatusChip(status: LanguagePackStatus) {
 @Composable
 private fun ModelActionButton(
     status: LanguagePackStatus,
+    isBuiltIn: Boolean = false,
     onDownload: () -> Unit,
     onDelete: () -> Unit
 ) {
     when (status) {
         LanguagePackStatus.DOWNLOADED -> {
-            TextButton(onClick = onDelete) {
-                Text("删除", color = MaterialTheme.colorScheme.error)
+            if (isBuiltIn) {
+                Text(
+                    text = "内置无法删除",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+            } else {
+                TextButton(onClick = onDelete) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
             }
         }
         LanguagePackStatus.DOWNLOADING -> {

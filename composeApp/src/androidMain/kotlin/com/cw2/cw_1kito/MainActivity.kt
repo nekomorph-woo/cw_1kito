@@ -405,13 +405,12 @@ class MainActivity : ComponentActivity() {
                 val success = languagePackManager.deleteLanguageModel(language)
                 if (success) {
                     Log.d(TAG, "语言模型删除成功: ${language.code}")
-                    // 乐观更新：立即将该模型状态设为 NOT_DOWNLOADED
-                    // ML Kit 的 isModelDownloaded 有内部缓存，删除后立即查询可能仍返回 true
                     viewModel.updateSingleLanguageModelStatus(
                         language, com.cw2.cw_1kito.model.LanguagePackStatus.NOT_DOWNLOADED
                     )
                 } else {
-                    viewModel.setError("删除失败")
+                    Log.w(TAG, "语言模型无法删除（可能为系统内置）: ${language.code}")
+                    viewModel.setError("该语言模型为系统内置，无法删除")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "语言模型删除失败", e)
